@@ -1,0 +1,12 @@
+*.log
+.DS_Store
+.Directory
+.git
+.legacy/
+docs/CODE_REVIEW_UPDATED_v6.5.1.md
+docs/MIGRATION_PLAN.md
+verify_*.php
+live_test.php
+final_audit.php
+jrb-remote-site-api-*.php
+unused/
