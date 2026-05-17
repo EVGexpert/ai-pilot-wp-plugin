@@ -1668,6 +1668,67 @@ function aipilot_admin_page() {
 
         <hr>
 
+        <h2>🔗 Подключение к AI Pilot</h2>
+        <p>Подключите этот сайт к вашему аккаунту AI Pilot для управления через чат.</p>
+
+        <?php
+        $connected_site = get_option('aipilot_connected_site', '');
+        $connected_at   = get_option('aipilot_connected_at', '');
+        ?>
+
+        <?php if ($connected_site): ?>
+        <div class="notice notice-success" style="background:#edfaef;border-left-color:#46b450;">
+            <p>✅ Сайт подключён к <strong><?php echo esc_html($connected_site); ?></strong></p>
+            <p style="font-size:0.85rem;color:#666;">Подключён: <?php echo esc_html($connected_at); ?></p>
+        </div>
+        <?php endif; ?>
+
+        <form method="post" style="margin-top:10px">
+            <?php wp_nonce_field('aipilot_connect'); ?>
+            <p>
+                <button type="submit" name="aipilot_connect" class="button button-primary" style="background:#667eea;border-color:#667eea">
+                    <?php echo $connected_site ? 'Переподключить' : 'Подключить к AI Pilot'; ?>
+                </button>
+                <?php if ($connected_site): ?>
+                <button type="submit" name="aipilot_disconnect" class="button" style="color:#d32f2f">
+                    Отключить
+                </button>
+                <?php endif; ?>
+            </p>
+        </form>
+
+        <?php
+        // Обработка подключения
+        if (isset($_POST['aipilot_connect']) && check_admin_referer('aipilot_connect')) {
+            $token = get_option('aipilot_api_token_hash', '');
+            $site_url = get_site_url();
+            // Редирект на страницу авторизации AI Pilot
+            $auth_url = add_query_arg([
+                'site' => urlencode($site_url),
+                'token' => '', // токен не храним в открытом виде, используем API
+                'redirect' => urlencode(admin_url('options-general.php?page=ai-pilot-settings&connected=1'))
+            ], 'https://pilotsite.ru/auth/connect');
+            echo '<script>window.open("'.esc_js($auth_url).'", "aipilot-auth", "width=600,height=700");</script>';
+            echo '<p style="color:#666">Откроется окно авторизации AI Pilot...</p>';
+        }
+
+        // Обработка отключения
+        if (isset($_POST['aipilot_disconnect']) && check_admin_referer('aipilot_connect')) {
+            delete_option('aipilot_connected_site');
+            delete_option('aipilot_connected_at');
+            echo '<div class="notice notice-info"><p>🔌 Сайт отключён от AI Pilot.</p></div>';
+        }
+
+        // Обработка callback (через API, не через редирект)
+        if (isset($_GET['connected']) && $_GET['connected'] === '1') {
+            update_option('aipilot_connected_site', get_site_url());
+            update_option('aipilot_connected_at', current_time('mysql'));
+            echo '<div class="notice notice-success"><p>✅ Сайт успешно подключён!</p></div>';
+        }
+        ?>
+
+        <hr>
+
         <h2>Permissions</h2>
         <form method="post">
             <?php wp_nonce_field('aipilot_settings'); ?>
