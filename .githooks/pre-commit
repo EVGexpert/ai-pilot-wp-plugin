@@ -1,0 +1,11 @@
+#!/bin/bash
+CHANGED=$(git diff --cached --name-only | grep -c "ai-pilot-plugin.php" || true)
+if [ "$CHANGED" -gt "0" ]; then
+    OLD_VERSION=$(git show HEAD:ai-pilot-plugin.php 2>/dev/null | grep -oP "define\('AI_PILOT_VERSION', '\K[^']+" || echo "0.0.0")
+    NEW_VERSION=$(grep -oP "define\('AI_PILOT_VERSION', '\K[^']+" ai-pilot-plugin.php)
+    if [ "$OLD_VERSION" = "$NEW_VERSION" ]; then
+        echo "⚠️  ВНИМАНИЕ: версия плагина не обновлена ($OLD_VERSION)"
+        echo "   Запусти: ./bump-version.sh"
+        echo "   Или продолжай: git commit --no-verify"
+    fi
+fi
