@@ -17,7 +17,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('AI_PILOT_VERSION', '1.2.0');
+define('AI_PILOT_VERSION', '2.0.0');
 define('AI_PILOT_PLUGIN_FILE', __FILE__);
 define('AI_PILOT_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AI_PILOT_PLUGIN_URL', plugin_dir_url(__FILE__));
@@ -1605,6 +1605,153 @@ function aipilot_agent_update_soul($request) {
     update_option('aipilot_agent_soul', wp_json_encode($soul));
 
     return ['saved' => true, 'soul' => $soul];
+}
+
+// ─── ACTION PROPOSAL (HUMAN-IN-THE-LOOP) ──────────────────────────
+
+add_action('rest_api_init', function() {
+    aipilot_register_route('/agent/propose', [
+        'methods'             => 'POST',
+        'callback'            => 'aipilot_agent_propose',
+        'permission_callback' => function() { return aipilot_verify_token_and_can('full_access'); },
+    ]);
+
+    aipilot_register_route('/agent/pending', [
+        'methods'             => 'GET',
+        'callback'            => 'aipilot_agent_pending',
+        'permission_callback' => function() { return aipilot_verify_token_and_can('site_info'); },
+    ]);
+
+    aipilot_register_route('/agent/approve/(?P<id>[a-f0-9-]+)', [
+        'methods'             => 'POST',
+        'callback'            => 'aipilot_agent_approve',
+        'permission_callback' => function() { return aipilot_verify_token_and_can('full_access'); },
+    ]);
+
+    aipilot_register_route('/agent/reject/(?P<id>[a-f0-9-]+)', [
+        'methods'             => 'POST',
+        'callback'            => 'aipilot_agent_reject',
+        'permission_callback' => function() { return aipilot_verify_token_and_can('full_access'); },
+    ]);
+
+    aipilot_register_route('/agent/action', [
+        'methods'             => 'POST',
+        'callback'            => 'aipilot_agent_action',
+        'permission_callback' => function() { return aipilot_verify_token_and_can('full_access'); },
+    ]);
+});
+
+function aipilot_agent_propose($request) {
+    $proposal = [
+        'id'          => wp_generate_uuid4(),
+        'action'      => sanitize_text_field($request->get_param('action') ?: 'unknown'),
+        'description' => sanitize_text_field($request->get_param('description') ?: ''),
+        'params'      => $request->get_param('params') ?: [],
+        'diff'        => $request->get_param('diff') ?: '',
+        'status'      => 'pending',
+        'created_at'  => current_time('mysql'),
+        'decided_at'  => null,
+        'agent'       => sanitize_text_field($request->get_param('agent') ?: 'subagent'),
+    ];
+
+    $proposals = get_option('aipilot_agent_proposals', []);
+    $proposals[$proposal['id']] = $proposal;
+    update_option('aipilot_agent_proposals', $proposals);
+
+    return ['proposal' => $proposal, 'pending' => count($proposals)];
+}
+
+function aipilot_agent_pending() {
+    $proposals = get_option('aipilot_agent_proposals', []);
+    $pending = array_filter($proposals, fn($p) => $p['status'] === 'pending');
+    return ['proposals' => array_values($pending), 'total' => count($pending)];
+}
+
+function aipilot_agent_approve($request) {
+    $id = $request->get_param('id');
+    $proposals = get_option('aipilot_agent_proposals', []);
+    if (!isset($proposals[$id])) {
+        return new WP_Error('not_found', 'Proposal not found', ['status' => 404]);
+    }
+    $proposals[$id]['status'] = 'approved';
+    $proposals[$id]['decided_at'] = current_time('mysql');
+    update_option('aipilot_agent_proposals', $proposals);
+
+    return ['status' => 'approved', 'proposal' => $proposals[$id]];
+}
+
+function aipilot_agent_reject($request) {
+    $id = $request->get_param('id');
+    $proposals = get_option('aipilot_agent_proposals', []);
+    if (!isset($proposals[$id])) {
+        return new WP_Error('not_found', 'Proposal not found', ['status' => 404]);
+    }
+    $proposals[$id]['status'] = 'rejected';
+    $proposals[$id]['decided_at'] = current_time('mysql');
+    update_option('aipilot_agent_proposals', $proposals);
+
+    return ['status' => 'rejected', 'proposal' => $proposals[$id]];
+}
+
+function aipilot_agent_action($request) {
+    $action = sanitize_text_field($request->get_param('action') ?: '');
+    $params = $request->get_param('params') ?: [];
+
+    switch ($action) {
+        case 'update_post':
+            $post_id = intval($params['post_id'] ?? 0);
+            $data = $params['data'] ?? [];
+            if (!$post_id || !get_post($post_id)) {
+                return new WP_Error('not_found', 'Post not found', ['status' => 404]);
+            }
+            $result = wp_update_post(array_merge(['ID' => $post_id], $data), true);
+            return ['done' => true, 'action' => $action, 'post_id' => $post_id, 'result' => $result];
+
+        case 'create_post':
+            $post_data = [
+                'post_title'   => sanitize_text_field($params['title'] ?? ''),
+                'post_content' => wp_kses_post($params['content'] ?? ''),
+                'post_status'  => in_array($params['status'] ?? '', ['publish', 'draft']) ? $params['status'] : 'draft',
+                'post_type'    => sanitize_text_field($params['type'] ?? 'post'),
+            ];
+            $post_id = wp_insert_post($post_data, true);
+            return ['done' => true, 'action' => $action, 'post_id' => $post_id];
+
+        case 'update_option':
+            $option = sanitize_text_field($params['option'] ?? '');
+            $value = $params['value'] ?? '';
+            if (!$option) return new WP_Error('missing_param', 'Option name required', ['status' => 400]);
+            update_option($option, $value);
+            return ['done' => true, 'action' => $action, 'option' => $option];
+
+        case 'switch_theme':
+            $theme = sanitize_text_field($params['theme'] ?? '');
+            if (!$theme) return new WP_Error('missing_param', 'Theme required', ['status' => 400]);
+            switch_theme($theme);
+            return ['done' => true, 'action' => $action, 'theme' => $theme];
+
+        case 'update_menu':
+            $menu_id = intval($params['menu_id'] ?? 0);
+            $items = $params['items'] ?? [];
+            if (!$menu_id) return new WP_Error('missing_param', 'Menu ID required', ['status' => 400]);
+            foreach ($items as $item) {
+                wp_update_nav_menu_item($menu_id, 0, [
+                    'menu-item-title'  => sanitize_text_field($item['title'] ?? ''),
+                    'menu-item-url'    => esc_url_raw($item['url'] ?? ''),
+                    'menu-item-status' => 'publish',
+                ]);
+            }
+            return ['done' => true, 'action' => $action, 'menu_id' => $menu_id, 'items_added' => count($items)];
+
+        case 'activate_plugin':
+            $slug = sanitize_text_field($params['plugin'] ?? '');
+            if (!$slug) return new WP_Error('missing_param', 'Plugin slug required', ['status' => 400]);
+            $result = activate_plugin($slug);
+            return ['done' => true, 'action' => $action, 'plugin' => $slug];
+
+        default:
+            return new WP_Error('unknown_action', "Unknown action: $action", ['status' => 400]);
+    }
 }
 
 // ─── ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ КОНТЕКСТА ─────────────────────────
