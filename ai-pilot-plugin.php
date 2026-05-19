@@ -17,7 +17,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('AI_PILOT_VERSION', '1.1.0');
+define('AI_PILOT_VERSION', '1.2.0');
 define('AI_PILOT_PLUGIN_FILE', __FILE__);
 define('AI_PILOT_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AI_PILOT_PLUGIN_URL', plugin_dir_url(__FILE__));
