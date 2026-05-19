@@ -17,7 +17,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('AI_PILOT_VERSION', '1.0.1');
+define('AI_PILOT_VERSION', '1.1.0');
 define('AI_PILOT_PLUGIN_FILE', __FILE__);
 define('AI_PILOT_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AI_PILOT_PLUGIN_URL', plugin_dir_url(__FILE__));
@@ -1403,6 +1403,376 @@ function aipilot_self_update($request) {
     ];
 }
 
+// ─── КОНТЕКСТ СУБАГЕНТА ────────────────────────────────────────────
+
+add_action('rest_api_init', function() {
+    aipilot_register_route('/agent/context', [
+        'methods'             => 'GET',
+        'callback'            => 'aipilot_agent_context',
+        'permission_callback' => function() { return aipilot_verify_token_and_can('site_info'); },
+    ]);
+
+    aipilot_register_route('/agent/scan', [
+        'methods'             => 'GET',
+        'callback'            => 'aipilot_agent_scan',
+        'permission_callback' => function() { return aipilot_verify_token_and_can('full_access'); },
+    ]);
+
+    aipilot_register_route('/agent/memory', [
+        'methods'             => 'GET',
+        'callback'            => 'aipilot_agent_get_memory',
+        'permission_callback' => function() { return aipilot_verify_token_and_can('site_info'); },
+    ]);
+
+    aipilot_register_route('/agent/memory', [
+        'methods'             => 'POST',
+        'callback'            => 'aipilot_agent_add_memory',
+        'permission_callback' => function() { return aipilot_verify_token_and_can('full_access'); },
+    ]);
+
+    aipilot_register_route('/agent/soul', [
+        'methods'             => 'GET',
+        'callback'            => 'aipilot_agent_get_soul',
+        'permission_callback' => function() { return aipilot_verify_token_and_can('site_info'); },
+    ]);
+
+    aipilot_register_route('/agent/soul', [
+        'methods'             => 'PUT',
+        'callback'            => 'aipilot_agent_update_soul',
+        'permission_callback' => function() { return aipilot_verify_token_and_can('full_access'); },
+    ]);
+});
+
+/**
+ * Полный контекст сайта для субагента.
+ * Всё в одном ответе: структура, ToV, история.
+ */
+function aipilot_agent_context() {
+    return [
+        'site'      => aipilot_get_site_data(),
+        'soul'      => aipilot_agent_get_soul_data(),
+        'memory'    => aipilot_agent_get_memory_data(),
+        'structure' => aipilot_agent_get_structure_data(),
+        'scanned_at' => get_option('aipilot_agent_last_scan', ''),
+    ];
+}
+
+/**
+ * Полное сканирование сайта для контекста субагента.
+ * Собирает: посты, страницы, плагины, тему, меню, пользователей, категории, теги.
+ */
+function aipilot_agent_scan() {
+    $structure = [
+        'site'      => aipilot_get_site_data(),
+        'content'   => [
+            'posts'      => aipilot_get_posts_flat(),
+            'pages'      => aipilot_get_pages_flat(),
+            'categories' => aipilot_get_categories_data(),
+            'tags'       => aipilot_get_tags_data(),
+        ],
+        'plugins'   => aipilot_get_plugins_data(),
+        'theme'     => aipilot_get_active_theme_data(),
+        'menus'     => aipilot_get_menus_data(),
+        'users'     => aipilot_get_users_data(),
+    ];
+
+    // Сохраняем структуру в options
+    update_option('aipilot_agent_structure', wp_json_encode($structure));
+    update_option('aipilot_agent_last_scan', current_time('mysql'));
+
+    return [
+        'scanned'    => true,
+        'scanned_at' => get_option('aipilot_agent_last_scan'),
+        'structure'  => $structure,
+    ];
+}
+
+/**
+ * Получить историю памяти субагента.
+ */
+function aipilot_agent_get_memory() {
+    return [
+        'memory'    => aipilot_agent_get_memory_data(),
+        'total'     => count(aipilot_agent_get_memory_data()),
+    ];
+}
+
+/**
+ * Добавить запись в память субагента.
+ */
+function aipilot_agent_add_memory($request) {
+    $entry = [
+        'timestamp' => current_time('mysql'),
+        'action'    => sanitize_text_field($request->get_param('action') ?: 'unknown'),
+        'summary'   => sanitize_text_field($request->get_param('summary') ?: ''),
+        'details'   => $request->get_param('details') ?: [],
+        'agent'     => sanitize_text_field($request->get_param('agent') ?: 'subagent'),
+    ];
+
+    $memory = aipilot_agent_get_memory_data();
+    array_push($memory, $entry);
+
+    // Храним последние 100 записей
+    if (count($memory) > 100) {
+        $memory = array_slice($memory, -100);
+    }
+
+    update_option('aipilot_agent_memory', wp_json_encode($memory));
+
+    return ['saved' => true, 'entry' => $entry];
+}
+
+/**
+ * Получить Tone of Voice (SOUL.md).
+ */
+function aipilot_agent_get_soul() {
+    return ['soul' => aipilot_agent_get_soul_data()];
+}
+
+/**
+ * Обновить Tone of Voice.
+ */
+function aipilot_agent_update_soul($request) {
+    $soul = [
+        'tone_of_voice' => sanitize_text_field($request->get_param('tone_of_voice') ?: ''),
+        'rules'         => $request->get_param('rules') ?: [],
+        'description'   => sanitize_text_field($request->get_param('description') ?: ''),
+        'updated_at'    => current_time('mysql'),
+    ];
+
+    update_option('aipilot_agent_soul', wp_json_encode($soul));
+
+    return ['saved' => true, 'soul' => $soul];
+}
+
+// ─── ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ КОНТЕКСТА ─────────────────────────
+
+/**
+ * Получить данные сайта.
+ */
+function aipilot_get_site_data() {
+    return [
+        'name'        => get_bloginfo('name'),
+        'description' => get_bloginfo('description'),
+        'url'         => get_bloginfo('url'),
+        'wp_version'  => get_bloginfo('version'),
+        'language'    => get_bloginfo('language'),
+        'admin_email' => get_bloginfo('admin_email'),
+        'timezone'    => get_option('timezone_string') ?: 'UTC',
+        'site_id'     => function_exists('aipilot_get_site_id') ? aipilot_get_site_id() : md5(get_site_url()),
+    ];
+}
+
+/**
+ * Получить список постов (плоский массив для структуры).
+ */
+function aipilot_get_posts_flat() {
+    $posts = get_posts([
+        'post_type'      => 'post',
+        'post_status'    => ['publish', 'draft'],
+        'posts_per_page' => -1,
+    ]);
+
+    return array_map(function($p) {
+        $cats = wp_get_post_categories($p->ID, ['fields' => 'names']);
+        return [
+            'id'          => $p->ID,
+            'title'       => $p->post_title,
+            'slug'        => $p->post_name,
+            'status'      => $p->post_status,
+            'date'        => $p->post_date,
+            'modified'    => $p->post_modified,
+            'categories'  => $cats,
+            'excerpt'     => wp_trim_words($p->post_excerpt ?: $p->post_content, 30),
+            'permalink'   => get_permalink($p->ID),
+        ];
+    }, $posts);
+}
+
+/**
+ * Получить список страниц (плоский массив).
+ */
+function aipilot_get_pages_flat() {
+    $pages = get_posts([
+        'post_type'      => 'page',
+        'post_status'    => 'publish',
+        'posts_per_page' => -1,
+        'orderby'        => 'menu_order',
+        'order'          => 'ASC',
+    ]);
+
+    return array_map(function($p) {
+        return [
+            'id'         => $p->ID,
+            'title'      => $p->post_title,
+            'slug'       => $p->post_name,
+            'parent'     => (int)$p->post_parent,
+            'menu_order' => (int)$p->menu_order,
+            'template'   => get_page_template_slug($p->ID),
+            'permalink'  => get_permalink($p->ID),
+        ];
+    }, $pages);
+}
+
+/**
+ * Получить категории (массив).
+ */
+function aipilot_get_categories_data() {
+    $categories = get_categories(['hide_empty' => false]);
+    return array_map(function($c) {
+        return [
+            'id'       => (int)$c->term_id,
+            'name'     => $c->name,
+            'slug'     => $c->slug,
+            'count'    => (int)$c->count,
+            'parent'   => (int)$c->parent,
+        ];
+    }, $categories);
+}
+
+/**
+ * Получить теги (массив).
+ */
+function aipilot_get_tags_data() {
+    $tags = get_tags(['hide_empty' => false]);
+    return array_map(function($t) {
+        return [
+            'id'    => (int)$t->term_id,
+            'name'  => $t->name,
+            'slug'  => $t->slug,
+            'count' => (int)$t->count,
+        ];
+    }, $tags);
+}
+
+/**
+ * Получить плагины (массив).
+ */
+function aipilot_get_plugins_data() {
+    if (!function_exists('get_plugins')) {
+        require_once ABSPATH . 'wp-admin/includes/plugin.php';
+    }
+
+    $all_plugins = get_plugins();
+    $active_plugins = get_option('active_plugins', []);
+
+    $plugins = [];
+    foreach ($all_plugins as $plugin_file => $data) {
+        $plugins[] = [
+            'file'    => $plugin_file,
+            'name'    => $data['Name'],
+            'version' => $data['Version'],
+            'active'  => in_array($plugin_file, $active_plugins),
+        ];
+    }
+
+    return [
+        'total'  => count($plugins),
+        'active' => count($active_plugins),
+        'list'   => $plugins,
+    ];
+}
+
+/**
+ * Получить активную тему (массив).
+ */
+function aipilot_get_active_theme_data() {
+    $theme = wp_get_theme();
+    return [
+        'name'        => $theme->get('Name'),
+        'version'     => $theme->get('Version'),
+        'author'      => $theme->get('Author'),
+        'template'    => $theme->get_template(),
+        'stylesheet'  => $theme->get_stylesheet(),
+        'screenshot'  => $theme->get_screenshot(),
+    ];
+}
+
+/**
+ * Получить меню (массив).
+ */
+function aipilot_get_menus_data() {
+    $menus = wp_get_nav_menus();
+    return array_map(function($m) {
+        return [
+            'id'    => $m->term_id,
+            'name'  => $m->name,
+            'slug'  => $m->slug,
+            'count' => $m->count,
+        ];
+    }, $menus);
+}
+
+/**
+ * Получить пользователей (массив).
+ */
+function aipilot_get_users_data() {
+    $users = get_users(['fields' => ['ID', 'user_login', 'display_name', 'user_email', 'roles']]);
+    return array_map(function($u) {
+        return [
+            'id'    => (int)$u->ID,
+            'login' => $u->user_login,
+            'name'  => $u->display_name,
+            'email' => $u->user_email,
+            'roles' => $u->roles,
+        ];
+    }, $users);
+}
+
+/**
+ * Получить сохранённые данные SOUL (ToV).
+ */
+function aipilot_agent_get_soul_data() {
+    $saved = get_option('aipilot_agent_soul', '');
+    if (empty($saved)) {
+        return [
+            'tone_of_voice' => 'Дружелюбный и профессиональный',
+            'rules'         => [
+                'Ничего не менять без подтверждения',
+                'Перед изменением показывать что будет изменено',
+                'Отвечать на русском языке',
+            ],
+            'description'   => get_bloginfo('description') ?: 'Сайт на WordPress',
+            'updated_at'    => '',
+        ];
+    }
+    return json_decode($saved, true) ?: [];
+}
+
+/**
+ * Получить сохранённую память субагента.
+ */
+function aipilot_agent_get_memory_data() {
+    $saved = get_option('aipilot_agent_memory', '');
+    if (empty($saved)) {
+        return [];
+    }
+    return json_decode($saved, true) ?: [];
+}
+
+/**
+ * Получить сохранённую структуру сайта.
+ */
+function aipilot_agent_get_structure_data() {
+    $saved = get_option('aipilot_agent_structure', '');
+    if (empty($saved)) {
+        return null;
+    }
+    return json_decode($saved, true) ?: null;
+}
+
+/**
+ * Получить site ID (хеш URL).
+ */
+function aipilot_get_site_id() {
+    $id = get_option('aipilot_site_id', '');
+    if (empty($id)) {
+        $id = md5(get_site_url() . wp_salt('auth'));
+        update_option('aipilot_site_id', $id);
+    }
+    return $id;
+}
+
 // ═══════════════════════════════════════════════════════════════════
 //  АУТЕНТИФИКАЦИЯ
 // ═══════════════════════════════════════════════════════════════════
@@ -1713,7 +2083,19 @@ function aipilot_admin_page() {
             </p>
         </div>
 
-        // Обработка отключения
+        // Сохранение ToV
+    if (isset($_POST['aipilot_save_soul']) && check_admin_referer('aipilot_settings')) {
+        $soul = [
+            'tone_of_voice' => sanitize_textarea_field($_POST['aipilot_tone_of_voice'] ?: ''),
+            'rules'         => array_filter(array_map('sanitize_text_field', explode("\n", $_POST['aipilot_rules'] ?: ''))),
+            'description'   => sanitize_text_field($_POST['aipilot_description'] ?: ''),
+            'updated_at'    => current_time('mysql'),
+        ];
+        update_option('aipilot_agent_soul', wp_json_encode($soul));
+        echo '<div class="notice notice-success"><p>✅ Tone of Voice сохранён.</p></div>';
+    }
+
+    // Обработка отключения
         if (isset($_POST['aipilot_disconnect']) && check_admin_referer('aipilot_connect')) {
             delete_option('aipilot_connected_site');
             delete_option('aipilot_connected_at');
@@ -1766,6 +2148,47 @@ function aipilot_admin_page() {
                     Reset to Defaults
                 </button>
             </p>
+        </form>
+
+        <hr>
+
+        <h2>🤖 Tone of Voice (для субагента)</h2>
+        <p>Настройте, как AI-помощник будет общаться от имени вашего сайта.</p>
+        <?php
+        $soul = aipilot_agent_get_soul_data();
+        ?>
+        <form method="post">
+            <?php wp_nonce_field('aipilot_settings'); ?>
+            <table class="form-table">
+                <tr>
+                    <th scope="row"><label for="tone_of_voice">Tone of Voice</label></th>
+                    <td>
+                        <input type="text" id="tone_of_voice" name="aipilot_tone_of_voice"
+                               value="<?php echo esc_attr($soul['tone_of_voice'] ?? ''); ?>"
+                               class="regular-text" placeholder="Дружелюбный и профессиональный">
+                        <p class="description">Как AI должен общаться (стиль, тон)</p>
+                    </td>
+                </tr>
+                <tr>
+                    <th scope="row"><label for="description">Описание сайта</label></th>
+                    <td>
+                        <input type="text" id="description" name="aipilot_description"
+                               value="<?php echo esc_attr($soul['description'] ?? ''); ?>"
+                               class="regular-text" placeholder="Чем занимается сайт">
+                        <p class="description">Короткое описание тематики сайта</p>
+                    </td>
+                </tr>
+                <tr>
+                    <th scope="row"><label for="rules">Правила</label></th>
+                    <td>
+                        <textarea id="rules" name="aipilot_rules" rows="5" class="large-text"><?php
+                            echo esc_textarea(implode("\n", $soul['rules'] ?? []));
+                        ?></textarea>
+                        <p class="description">Каждое правило на новой строке</p>
+                    </td>
+                </tr>
+            </table>
+            <p><button type="submit" name="aipilot_save_soul" class="button button-primary">Save Tone of Voice</button></p>
         </form>
 
         <hr>
