@@ -1928,7 +1928,7 @@ function aipilot_admin_page() {
         $token_hash = wp_hash($token);
 
         update_option('aipilot_api_token_hash', $token_hash);
-        delete_option('aipilot_api_token');
+        update_option('aipilot_last_token', $token);
 
         $new_token = $token;
     }
@@ -2062,7 +2062,7 @@ function aipilot_admin_page() {
                     onclick="window.open(
                         '<?php echo esc_js(add_query_arg([
                             'site' => urlencode(get_site_url()),
-                            'token' => '',
+                            'token' => urlencode(get_option('aipilot_last_token', '')),
                             'redirect' => urlencode(admin_url('options-general.php?page=ai-pilot-settings&connected=1')),
                             'session' => 'agent:main:main'
                         ], 'https://chat.pilotsite.ru/connect')); ?>',
