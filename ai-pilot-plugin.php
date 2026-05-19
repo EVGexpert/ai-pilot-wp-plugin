@@ -1403,6 +1403,68 @@ function aipilot_self_update($request) {
     ];
 }
 
+// ─── ОДНОРАЗОВЫЙ CONNECTION CODE ──────────────────────────────────
+
+add_action('rest_api_init', function() {
+    aipilot_register_route('/agent/connect-code', [
+        'methods'             => 'POST',
+        'callback'            => 'aipilot_agent_connect_code',
+        'permission_callback' => function() { return aipilot_verify_token_and_can('full_access'); },
+    ]);
+
+    aipilot_register_route('/agent/verify-code', [
+        'methods'             => 'GET',
+        'callback'            => 'aipilot_agent_verify_code',
+        'permission_callback' => '__return_true',
+    ]);
+});
+
+function aipilot_agent_connect_code() {
+    $code = wp_generate_password(8, false);
+    $expires = time() + 300; // 5 минут
+
+    $codes = get_option('aipilot_connect_codes', []);
+    $codes[$code] = [
+        'expires'  => $expires,
+        'used'     => false,
+        'token'    => get_option('aipilot_last_token', ''),
+        'site_url' => get_site_url(),
+        'site_name' => get_bloginfo('name'),
+    ];
+    // Чистим просроченные
+    foreach ($codes as $k => $v) {
+        if ($v['expires'] < time()) unset($codes[$k]);
+    }
+    update_option('aipilot_connect_codes', $codes);
+
+    return ['code' => $code, 'expires_in' => 300, 'connect_url' => add_query_arg('code', $code, 'https://chat.pilotsite.ru/connect')];
+}
+
+function aipilot_agent_verify_code($request) {
+    $code = sanitize_text_field($request->get_param('code'));
+    if (empty($code)) return new WP_Error('missing_code', 'Code required', ['status' => 400]);
+
+    $codes = get_option('aipilot_connect_codes', []);
+    if (!isset($codes[$code])) return new WP_Error('invalid_code', 'Invalid or expired code', ['status' => 404]);
+
+    $entry = $codes[$code];
+    if ($entry['used'] || $entry['expires'] < time()) {
+        return new WP_Error('expired_code', 'Code expired', ['status' => 410]);
+    }
+
+    // Помечаем как использованный
+    $entry['used'] = true;
+    $codes[$code] = $entry;
+    update_option('aipilot_connect_codes', $codes);
+
+    return [
+        'verified'  => true,
+        'site_url'  => $entry['site_url'],
+        'site_name' => $entry['site_name'],
+        'token'     => $entry['token'],
+    ];
+}
+
 // ─── КОНТЕКСТ СУБАГЕНТА ────────────────────────────────────────────
 
 add_action('rest_api_init', function() {
@@ -2059,10 +2121,16 @@ function aipilot_admin_page() {
                     type="button"
                     class="button button-primary"
                     style="background:#7837df;border-color:#7837df;color:#fff"
-                    onclick="window.open(
-                        '<?php echo esc_js(add_query_arg([
-                            'site' => urlencode(get_site_url()),
-                            'token' => urlencode(get_option('aipilot_last_token', '')),
+                    onclick="
+                        // Получаем одноразовый code через REST API
+                        fetch('<?php echo esc_js(rest_url('aipilot/v1/agent/connect-code')); ?>', {
+                            method: 'POST',
+                            headers: { 'X-AI-Pilot-Token': '<?php echo esc_js(get_option('aipilot_last_token', '')); ?>' }
+                        })
+                        .then(r => r.json())
+                        .then(d => { if(d.code) window.open(d.connect_url + '&site=' + encodeURIComponent('<?php echo esc_js(get_site_url()); ?>')); })
+                        .catch(() => window.open('<?php echo esc_js(add_query_arg('site', urlencode(get_site_url()), 'https://chat.pilotsite.ru/connect')); ?>'));
+                        "
                             'redirect' => urlencode(admin_url('options-general.php?page=ai-pilot-settings&connected=1')),
                             'session' => 'agent:main:main'
                         ], 'https://chat.pilotsite.ru/connect')); ?>',
