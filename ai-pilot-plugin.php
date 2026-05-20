@@ -2,7 +2,7 @@
 /**
  * Plugin Name: AI Pilot – Remote Site API
  * Description: REST API для удалённого управления WordPress-сайтами через AI Pilot
- * Version: 1.0.1
+ * Version: 2.0.0
  * Author: AI Pilot
  * License: GPLv2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -2277,13 +2277,8 @@ function aipilot_admin_page() {
                         .then(r => r.json())
                         .then(d => { if(d.code) window.open(d.connect_url + '&site=' + encodeURIComponent('<?php echo esc_js(get_site_url()); ?>')); })
                         .catch(() => window.open('<?php echo esc_js(add_query_arg('site', urlencode(get_site_url()), 'https://chat.pilotsite.ru/connect')); ?>'));
-                        "
-                            'redirect' => urlencode(admin_url('options-general.php?page=ai-pilot-settings&connected=1')),
-                            'session' => 'agent:main:main'
-                        ], 'https://chat.pilotsite.ru/connect')); ?>',
-                        'aipilot-auth',
-                        'width=480,height=640,scrollbars=yes'
-                    ); return false;"
+                        ");
+                    return false;"
                 >
                     <?php echo $connected_site ? '🔄 Переподключить' : '🔗 Подключить к AI Pilot'; ?>
                 </button>
@@ -2298,7 +2293,8 @@ function aipilot_admin_page() {
             </p>
         </div>
 
-        // Сохранение ToV
+        <?php
+    // Сохранение ToV
     if (isset($_POST['aipilot_save_soul']) && check_admin_referer('aipilot_settings')) {
         $soul = [
             'tone_of_voice' => sanitize_textarea_field($_POST['aipilot_tone_of_voice'] ?: ''),
