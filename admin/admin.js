@@ -1,9 +1,8 @@
 /**
  * AI Pilot – Admin UI
  *
- * Connect button handler with one-time code flow.
- * Opens a popup to chat.pilotsite.ru/connect for site authorization.
- * After connecting, the popup shows success and stays on chat.pilotsite.ru.
+ * Connect button: generates one-time code → opens connect popup.
+ * Вся магия на сервере (auth-api), плагин только передаёт код.
  */
 (function () {
     'use strict';
@@ -14,34 +13,24 @@
     btn.addEventListener('click', function (e) {
         e.preventDefault();
 
-        fetch(AIPilotAdmin.restUrl, {
-            method: 'POST',
-            headers: { 'X-AI-Pilot-Token': AIPilotAdmin.token }
-        })
+        fetch(AIPilotAdmin.restUrl, { method: 'POST' })
             .then(function (r) {
-                if (!r.ok) {
-                    throw new Error('HTTP ' + r.status);
-                }
+                if (!r.ok) throw new Error('HTTP ' + r.status);
                 return r.json();
             })
             .then(function (data) {
                 if (data && data.code && data.code.length === 8 && data.connect_url) {
-                    // Connect URL from plugin (chat.pilotsite.ru/connect?code=XXX)
                     var url = data.connect_url +
                         '&site=' + encodeURIComponent(AIPilotAdmin.siteUrl);
                     window.open(url, 'aipilot-auth',
                         'width=480,height=640,scrollbars=yes');
                 } else {
-                    throw new Error('Invalid code response');
+                    throw new Error('Invalid response');
                 }
             })
-            .catch(function () {
-                // Fallback: передаём токен прямо в URL
-                var url = AIPilotAdmin.connectUrl +
-                    '?site=' + encodeURIComponent(AIPilotAdmin.siteUrl) +
-                    '&token=' + encodeURIComponent(AIPilotAdmin.token || '');
-                window.open(url, 'aipilot-auth',
-                    'width=480,height=640,scrollbars=yes');
+            .catch(function (err) {
+                console.error('AI Pilot connect failed:', err);
+                alert('Ошибка подключения к AI Pilot. Попробуйте позже.');
             });
     });
 })();

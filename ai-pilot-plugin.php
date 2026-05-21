@@ -2,7 +2,7 @@
 /**
  * Plugin Name: AI Pilot – Remote Site API
  * Description: REST API для удалённого управления WordPress-сайтами через AI Pilot
- * Version: 2.0.4
+ * Version: 2.1.0
  * Author: AI Pilot
  * License: GPLv2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -17,7 +17,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('AI_PILOT_VERSION', '2.0.4');
+define('AI_PILOT_VERSION', '2.1.0');
 define('AI_PILOT_PLUGIN_FILE', __FILE__);
 define('AI_PILOT_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AI_PILOT_PLUGIN_URL', plugin_dir_url(__FILE__));
@@ -1409,7 +1409,7 @@ add_action('rest_api_init', function() {
     aipilot_register_route('/agent/connect-code', [
         'methods'             => 'POST',
         'callback'            => 'aipilot_agent_connect_code',
-        'permission_callback' => function() { return aipilot_verify_token_and_can('full_access'); },
+        'permission_callback' => '__return_true',
     ]);
 
     aipilot_register_route('/agent/verify-code', [

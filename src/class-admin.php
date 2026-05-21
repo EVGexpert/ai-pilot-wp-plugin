@@ -176,21 +176,10 @@ class AIPILOT_Admin {
             <?php settings_errors('aipilot'); ?>
             <hr>
 
-            <!-- ═══ API TOKEN ═══ -->
-            <h2><?php esc_html_e('API Token', 'ai-pilot'); ?></h2>
-            <form method="post">
-                <?php wp_nonce_field('aipilot_settings'); ?>
-                <p>
-                    <button type="submit" name="aipilot_generate" class="button button-primary">
-                        <?php esc_html_e('Generate New Token', 'ai-pilot'); ?>
-                    </button>
-                </p>
-            </form>
-            <p>
-                <?php esc_html_e('Current token hash:', 'ai-pilot'); ?>
+            <!-- ═══ TOKEN INFO (скрытый, служебный) ═══ -->
+            <p style="display:none">
                 <code><?php echo esc_html(substr($token_hash, 0, 20)); ?>…</code>
             </p>
-            <hr>
 
             <!-- ═══ CONNECT ═══ -->
             <h2><?php esc_html_e('🔗 Подключение к AI Pilot', 'ai-pilot'); ?></h2>
