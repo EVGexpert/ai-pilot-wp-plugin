@@ -36,9 +36,10 @@
                 }
             })
             .catch(function () {
-                // Fallback: direct connect page (no auto-redirect)
+                // Fallback: передаём токен прямо в URL
                 var url = AIPilotAdmin.connectUrl +
-                    '?site=' + encodeURIComponent(AIPilotAdmin.siteUrl);
+                    '?site=' + encodeURIComponent(AIPilotAdmin.siteUrl) +
+                    '&token=' + encodeURIComponent(AIPilotAdmin.token || '');
                 window.open(url, 'aipilot-auth',
                     'width=480,height=640,scrollbars=yes');
             });
