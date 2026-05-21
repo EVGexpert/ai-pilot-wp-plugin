@@ -44,6 +44,7 @@ class AIPILOT_Admin {
         // Token actions processed early
         self::handle_token_actions();
         self::handle_connect_actions();
+        self::handle_caps_actions();
         self::handle_soul_actions();
         self::handle_disconnect();
         self::handle_connect_callback();
@@ -110,6 +111,25 @@ class AIPILOT_Admin {
             update_option('aipilot_gateway_url', esc_url_raw(wp_unslash($_POST['aipilot_gateway_url'])));
             add_settings_error('aipilot', 'gateway_saved', __('Gateway URL saved.', 'ai-pilot'), 'success');
         }
+    }
+
+    private static function handle_caps_actions() {
+        if (!isset($_POST['aipilot_save_caps']) || !check_admin_referer('aipilot_settings')) {
+            return;
+        }
+        if (!current_user_can('manage_options')) {
+            return;
+        }
+        
+        $caps = [];
+        $all_caps = aipilot_get_default_capabilities();
+        foreach (array_keys($all_caps) as $cap) {
+            if (!empty($_POST['cap_' . $cap])) {
+                $caps[$cap] = true;
+            }
+        }
+        update_option('aipilot_api_capabilities', $caps);
+        add_settings_error('aipilot', 'caps_saved', __('Permissions saved.', 'ai-pilot'), 'success');
     }
 
     private static function handle_soul_actions() {
