@@ -105,6 +105,7 @@ class AdminHandler {
             'menus_read' => ['label' => 'List Nav Menus'],
             'menus_create' => ['label' => 'Create Nav Menus'],
             'themes_read' => ['label' => 'List Support Themes'],
+            'full_access' => ['label' => 'Full Agent Access (propose, approve, all write ops)'],
         ];
 
         $groups['WordPress Content'] = [
