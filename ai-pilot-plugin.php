@@ -1355,8 +1355,23 @@ function aipilot_update_options($request) {
         return new WP_Error('invalid_data', 'options must be a non-empty object', ['status' => 400]);
     }
 
+    // Белый список разрешённых опций — критичные опции защищены
+    $allowed = [
+        'blogname', 'blogdescription', 'site_icon', 'timezone_string',
+        'date_format', 'time_format', 'start_of_week', 'WPLANG',
+        'posts_per_page', 'posts_per_rss', 'rss_use_excerpt',
+        'comment_moderation', 'comment_registration', 'close_comments_for_old_posts',
+        'show_on_front', 'page_on_front', 'page_for_posts',
+        'category_base', 'tag_base',
+        'upload_path', 'upload_url_path',
+    ];
+
     foreach ($options as $key => $value) {
-        update_option(sanitize_text_field($key), $value);
+        $key = sanitize_text_field($key);
+        if (!in_array($key, $allowed, true)) {
+            return new WP_Error('option_not_allowed', "Option '{$key}' is not in the allowed list", ['status' => 403]);
+        }
+        update_option($key, $value);
     }
 
     return ['updated' => true];
@@ -1772,7 +1787,6 @@ function aipilot_get_site_data() {
         'url'         => get_bloginfo('url'),
         'wp_version'  => get_bloginfo('version'),
         'language'    => get_bloginfo('language'),
-        'admin_email' => get_bloginfo('admin_email'),
         'timezone'    => get_option('timezone_string') ?: 'UTC',
         'site_id'     => function_exists('aipilot_get_site_id') ? aipilot_get_site_id() : md5(get_site_url()),
     ];
