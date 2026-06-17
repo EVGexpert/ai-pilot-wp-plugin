@@ -2009,9 +2009,37 @@ function aipilot_get_site_id() {
 /**
  * Проверить API-токен из заголовка запроса.
  *
+ * Поддерживает два механизма:
+ * 1. JWT Bearer token (Authorization: Bearer <jwt>) — полная валидация exp/iat/jti
+ * 2. Простой API-токен (X-AI-PILOT-TOKEN / X-OPENCLAW-TOKEN) — backward compat
+ *
  * @return true|WP_Error
  */
 function aipilot_verify_token() {
+    // ─── Попытка 1: JWT Bearer token ─────────────────────────────────
+    $auth_header = '';
+    if (isset($_SERVER['HTTP_AUTHORIZATION'])) {
+        $auth_header = sanitize_text_field(wp_unslash($_SERVER['HTTP_AUTHORIZATION']));
+    } elseif (isset($_SERVER['REDIRECT_HTTP_AUTHORIZATION'])) {
+        $auth_header = sanitize_text_field(wp_unslash($_SERVER['REDIRECT_HTTP_AUTHORIZATION']));
+    }
+
+    if (!empty($auth_header) && str_starts_with($auth_header, 'Bearer ')) {
+        $jwt_token = substr($auth_header, 7);
+
+        // Делегируем JWT-валидацию функции из module-auth-helper.php
+        if (function_exists('aipilot_verify_jwt_token')) {
+            $decoded = aipilot_verify_jwt_token($jwt_token);
+            if ($decoded !== false) {
+                return true;
+            }
+        }
+
+        // JWT валидация провалена — возвращаем ошибку
+        return new WP_Error('auth_invalid', 'Invalid or expired JWT token', ['status' => 403]);
+    }
+
+    // ─── Попытка 2: Простой API-токен (backward compat) ──────────────
     $header = '';
 
     // Проверяем новый заголовок
@@ -2025,6 +2053,7 @@ function aipilot_verify_token() {
     }
 
     if (empty($header)) {
+        aipilot_log_auth_failure_simple('missing_bearer');
         return new WP_Error('auth_required', 'Missing API token', ['status' => 401]);
     }
 
@@ -2034,10 +2063,26 @@ function aipilot_verify_token() {
     }
 
     if (wp_hash($header) !== $stored_hash) {
+        aipilot_log_auth_failure_simple('token_invalid');
         return new WP_Error('auth_invalid', 'Invalid API token', ['status' => 403]);
     }
 
     return true;
+}
+
+/**
+ * Простое логирование ошибок аутентификации (для non-JWT path).
+ * JWT path использует aipilot_log_auth_failure() из module-auth-helper.php.
+ *
+ * @param string $reason Failure reason code
+ */
+function aipilot_log_auth_failure_simple($reason) {
+    if (function_exists('aipilot_log_auth_failure')) {
+        aipilot_log_auth_failure($reason);
+    } else {
+        $ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+        error_log("[AI Pilot] Auth failure: {$reason} from {$ip}");
+    }
 }
 
 /**
@@ -2061,6 +2106,41 @@ function aipilot_verify_token_and_can($capability) {
     }
 
     return true;
+}
+
+// ─── AUTH REVOKE ENDPOINT ────────────────────────────────────────────
+
+add_action('rest_api_init', function() {
+    aipilot_register_route('/auth/revoke', [
+        'methods'             => 'POST',
+        'callback'            => 'aipilot_revoke_token_endpoint',
+        'permission_callback' => function() { return current_user_can('manage_options'); },
+    ]);
+});
+
+/**
+ * Отзыв JWT-токена по jti (админский эндпоинт).
+ *
+ * @param WP_REST_Request $request
+ * @return array|WP_Error
+ */
+function aipilot_revoke_token_endpoint(WP_REST_Request $request) {
+    $jti = sanitize_text_field($request->get_param('jti'));
+    if (empty($jti)) {
+        return new WP_Error('missing_jti', 'Token ID (jti) required', ['status' => 400]);
+    }
+
+    if (!function_exists('aipilot_revoke_token')) {
+        return new WP_Error('not_available', 'Token revocation not available', ['status' => 501]);
+    }
+
+    aipilot_revoke_token($jti);
+
+    return [
+        'success' => true,
+        'message' => 'Token revoked',
+        'jti'     => $jti,
+    ];
 }
 
 // ═══════════════════════════════════════════════════════════════════
