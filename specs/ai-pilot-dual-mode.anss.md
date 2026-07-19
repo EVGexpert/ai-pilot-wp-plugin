@@ -10,9 +10,9 @@
 **Принял пакет:** `ai-pilot-openclaw-prompts-v1.1.0`
 
 **Компонентные спецификации:**
-- [`ai-pilot-wp-plugin.anss.md`](ai-pilot-wp-plugin.anss.md) — WordPress Remote Site API
-- [`ai-pilot-auth-api.anss.md`](ai-pilot-auth-api.anss.md) — Auth API / Mode Router
-- [`ai-pilot-web-chat.anss.md`](ai-pilot-web-chat.anss.md) — Frontend Chat UI
+- [`ai-pilot-wp-plugin.anss.md`](./ai-pilot-wp-plugin.anss.md) — WordPress Remote Site API
+- [`ai-pilot-auth-api.anss.md`](./ai-pilot-auth-api.anss.md) — Auth API / Mode Router
+- [`ai-pilot-web-chat.anss.md`](./ai-pilot-web-chat.anss.md) — Frontend Chat UI
 
 ---
 
