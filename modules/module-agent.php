@@ -1252,7 +1252,8 @@ function aipilot_agent_search($params) {
 /**
  * Создать предложение
  */
-function aipilot_agent_propose($request) {
+if (!function_exists('aipilot_agent_propose')) {
+    function aipilot_agent_propose($request) {
     $action  = $request->get_param('action');
     $params  = $request->get_param('params') ?: [];
     $summary = $request->get_param('summary') ?: '';
@@ -1291,6 +1292,7 @@ function aipilot_agent_propose($request) {
     return [
         'proposal' => $proposal,
     ];
+    }
 }
 
 /**
@@ -1482,18 +1484,20 @@ function aipilot_save_proposals($proposals) {
 }
 
 // Список ожидающих предложений
-/**
- * Список ожидающих предложений (human-in-the-loop).
- *
- * @return array
- */
-function aipilot_agent_pending() {
-    return [
-        'pending'  => aipilot_get_proposals('pending'),
-        'approved' => aipilot_get_proposals('approved'),
-        'rejected' => aipilot_get_proposals('rejected'),
-        'total_pending' => count(aipilot_get_proposals('pending')),
-    ];
+if (!function_exists('aipilot_agent_pending')) {
+    /**
+     * Список ожидающих предложений (human-in-the-loop).
+     *
+     * @return array
+     */
+    function aipilot_agent_pending() {
+        return [
+            'pending'  => aipilot_get_proposals('pending'),
+            'approved' => aipilot_get_proposals('approved'),
+            'rejected' => aipilot_get_proposals('rejected'),
+            'total_pending' => count(aipilot_get_proposals('pending')),
+        ];
+    }
 }
 
 /**
@@ -1513,80 +1517,84 @@ function aipilot_agent_get_proposal($request) {
 }
 
 // Утвердить предложение
-/**
- * Утвердить предложение.
- *
- * @param WP_REST_Request $request
- * @return array|WP_Error
- */
-function aipilot_agent_approve($request) {
-    $id = (int) $request->get_param('id');
-    $proposals = aipilot_get_proposals('all');
+if (!function_exists('aipilot_agent_approve')) {
+    /**
+     * Утвердить предложение.
+     *
+     * @param WP_REST_Request $request
+     * @return array|WP_Error
+     */
+    function aipilot_agent_approve($request) {
+        $id = (int) $request->get_param('id');
+        $proposals = aipilot_get_proposals('all');
 
-    $found = false;
-    foreach ($proposals as &$proposal) {
-        if ($proposal['id'] === $id) {
-            if ($proposal['status'] !== 'pending') {
-                return new WP_Error('invalid_status', "Proposal #{$id} is already {$proposal['status']}", ['status' => 400]);
+        $found = false;
+        foreach ($proposals as &$proposal) {
+            if ($proposal['id'] === $id) {
+                if ($proposal['status'] !== 'pending') {
+                    return new WP_Error('invalid_status', "Proposal #{$id} is already {$proposal['status']}", ['status' => 400]);
+                }
+
+                $proposal['status'] = 'approved';
+                $proposal['executed_at'] = current_time('c');
+                $found = true;
+
+                // Исполняем действие
+                $execute_result = aipilot_execute_proposal($proposal);
+                $proposal['result'] = $execute_result;
+                break;
             }
-
-            $proposal['status'] = 'approved';
-            $proposal['executed_at'] = current_time('c');
-            $found = true;
-
-            // Исполняем действие
-            $execute_result = aipilot_execute_proposal($proposal);
-            $proposal['result'] = $execute_result;
-            break;
         }
+
+        if (!$found) {
+            return new WP_Error('not_found', "Proposal #{$id} not found", ['status' => 404]);
+        }
+
+        aipilot_save_proposals($proposals);
+        do_action('aipilot_proposal_approved', $proposal);
+
+        return [
+            'approved' => true,
+            'proposal' => $proposal,
+        ];
     }
-
-    if (!$found) {
-        return new WP_Error('not_found', "Proposal #{$id} not found", ['status' => 404]);
-    }
-
-    aipilot_save_proposals($proposals);
-    do_action('aipilot_proposal_approved', $proposal);
-
-    return [
-        'approved' => true,
-        'proposal' => $proposal,
-    ];
 }
 
 // Отклонить предложение
-/**
- * Отклонить предложение.
- *
- * @param WP_REST_Request $request
- * @return array|WP_Error
- */
-function aipilot_agent_reject($request) {
-    $id = (int) $request->get_param('id');
-    $reason = $request->get_param('reason') ? sanitize_text_field($request->get_param('reason')) : 'Rejected by user';
+if (!function_exists('aipilot_agent_reject')) {
+    /**
+     * Отклонить предложение.
+     *
+     * @param WP_REST_Request $request
+     * @return array|WP_Error
+     */
+    function aipilot_agent_reject($request) {
+        $id = (int) $request->get_param('id');
+        $reason = $request->get_param('reason') ? sanitize_text_field($request->get_param('reason')) : 'Rejected by user';
 
-    $proposals = aipilot_get_proposals('all');
-    $found = false;
-    foreach ($proposals as &$proposal) {
-        if ($proposal['id'] === $id) {
-            if ($proposal['status'] !== 'pending') {
-                return new WP_Error('invalid_status', "Proposal #{$id} is already {$proposal['status']}", ['status' => 400]);
+        $proposals = aipilot_get_proposals('all');
+        $found = false;
+        foreach ($proposals as &$proposal) {
+            if ($proposal['id'] === $id) {
+                if ($proposal['status'] !== 'pending') {
+                    return new WP_Error('invalid_status', "Proposal #{$id} is already {$proposal['status']}", ['status' => 400]);
+                }
+                $proposal['status'] = 'rejected';
+                $proposal['reason'] = $reason;
+                $found = true;
+                break;
             }
-            $proposal['status'] = 'rejected';
-            $proposal['reason'] = $reason;
-            $found = true;
-            break;
         }
+
+        if (!$found) {
+            return new WP_Error('not_found', "Proposal #{$id} not found", ['status' => 404]);
+        }
+
+        aipilot_save_proposals($proposals);
+        do_action('aipilot_proposal_rejected', $proposal);
+
+        return ['rejected' => true, 'reason' => $reason];
     }
-
-    if (!$found) {
-        return new WP_Error('not_found', "Proposal #{$id} not found", ['status' => 404]);
-    }
-
-    aipilot_save_proposals($proposals);
-    do_action('aipilot_proposal_rejected', $proposal);
-
-    return ['rejected' => true, 'reason' => $reason];
 }
 
 /**
@@ -1623,16 +1631,18 @@ function aipilot_execute_proposal($proposal) {
 //  5. КОНФИГУРАЦИЯ: ГАТЕЙВЕЙ И РЕГИСТРАЦИЯ
 // ═══════════════════════════════════════════════════════════════════
 
-/**
- * Уникальный ID сайта в системе AI Pilot
- */
-function aipilot_get_site_id() {
-    $site_id = get_option('aipilot_site_id', '');
-    if (empty($site_id)) {
-        $site_id = 'wp_' . substr(wp_hash(home_url() . get_bloginfo('name')), 0, 12);
-        update_option('aipilot_site_id', $site_id);
+if (!function_exists('aipilot_get_site_id')) {
+    /**
+     * Уникальный ID сайта в системе AI Pilot
+     */
+    function aipilot_get_site_id() {
+        $site_id = get_option('aipilot_site_id', '');
+        if (empty($site_id)) {
+            $site_id = 'wp_' . substr(wp_hash(home_url() . get_bloginfo('name')), 0, 12);
+            update_option('aipilot_site_id', $site_id);
+        }
+        return $site_id;
     }
-    return $site_id;
 }
 
 /**

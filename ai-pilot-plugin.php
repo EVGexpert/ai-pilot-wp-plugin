@@ -25,11 +25,18 @@ define('AI_PILOT_PLUGIN_URL', plugin_dir_url(__FILE__));
 // ─── РЕГИСТРАЦИЯ РОУТОВ ─────────────────────────────────────────────
 
 /**
- * Регистрирует роут в нескольких неймспейсах для обратной совместимости
+ * Регистрирует роут в нескольких неймспейсах для обратной совместимости.
+ * Автоматически пропускает дублирующиеся регистрации (одинаковый route + methods).
  */
 function aipilot_register_route($route, $args) {
+    static $registered = [];
+    $methods = is_array($args['methods']) ? implode(',', $args['methods']) : (string)($args['methods'] ?? 'GET');
+    $key = $route . '::' . $methods;
+    if (isset($registered[$key])) {
+        return;
+    }
+    $registered[$key] = true;
     register_rest_route('aipilot/v1', $route, $args);
-    // Обратная совместимость со старыми клиентами
     register_rest_route('openclaw/v1', $route, $args);
 }
 
@@ -1343,6 +1350,24 @@ function aipilot_get_options($request) {
 }
 
 /**
+ * Белый список разрешённых опций — критичные опции защищены.
+ * Содержит 21 опцию для безопасного обновления через API.
+ *
+ * @return string[]
+ */
+function aipilot_get_allowed_options() {
+    return [
+        'blogname', 'blogdescription', 'site_icon', 'timezone_string',
+        'date_format', 'time_format', 'start_of_week', 'WPLANG',
+        'posts_per_page', 'posts_per_rss', 'rss_use_excerpt',
+        'comment_moderation', 'comment_registration', 'close_comments_for_old_posts',
+        'show_on_front', 'page_on_front', 'page_for_posts',
+        'category_base', 'tag_base',
+        'upload_path', 'upload_url_path',
+    ];
+}
+
+/**
  * Обновить опции сайта.
  *
  * @param WP_REST_Request $request
@@ -1355,16 +1380,7 @@ function aipilot_update_options($request) {
         return new WP_Error('invalid_data', 'options must be a non-empty object', ['status' => 400]);
     }
 
-    // Белый список разрешённых опций — критичные опции защищены
-    $allowed = [
-        'blogname', 'blogdescription', 'site_icon', 'timezone_string',
-        'date_format', 'time_format', 'start_of_week', 'WPLANG',
-        'posts_per_page', 'posts_per_rss', 'rss_use_excerpt',
-        'comment_moderation', 'comment_registration', 'close_comments_for_old_posts',
-        'show_on_front', 'page_on_front', 'page_for_posts',
-        'category_base', 'tag_base',
-        'upload_path', 'upload_url_path',
-    ];
+    $allowed = aipilot_get_allowed_options();
 
     foreach ($options as $key => $value) {
         $key = sanitize_text_field($key);
@@ -1662,56 +1678,64 @@ add_action('rest_api_init', function() {
     ]);
 });
 
-function aipilot_agent_propose($request) {
-    $proposal = [
-        'id'          => wp_generate_uuid4(),
-        'action'      => sanitize_text_field($request->get_param('action') ?: 'unknown'),
-        'description' => sanitize_text_field($request->get_param('description') ?: ''),
-        'params'      => $request->get_param('params') ?: [],
-        'diff'        => $request->get_param('diff') ?: '',
-        'status'      => 'pending',
-        'created_at'  => current_time('mysql'),
-        'decided_at'  => null,
-        'agent'       => sanitize_text_field($request->get_param('agent') ?: 'subagent'),
-    ];
+if (!function_exists('aipilot_agent_propose')) {
+    function aipilot_agent_propose($request) {
+        $proposal = [
+            'id'          => wp_generate_uuid4(),
+            'action'      => sanitize_text_field($request->get_param('action') ?: 'unknown'),
+            'description' => sanitize_text_field($request->get_param('description') ?: ''),
+            'params'      => $request->get_param('params') ?: [],
+            'diff'        => $request->get_param('diff') ?: '',
+            'status'      => 'pending',
+            'created_at'  => current_time('mysql'),
+            'decided_at'  => null,
+            'agent'       => sanitize_text_field($request->get_param('agent') ?: 'subagent'),
+        ];
 
-    $proposals = get_option('aipilot_agent_proposals', []);
-    $proposals[$proposal['id']] = $proposal;
-    update_option('aipilot_agent_proposals', $proposals);
+        $proposals = get_option('aipilot_agent_proposals', []);
+        $proposals[$proposal['id']] = $proposal;
+        update_option('aipilot_agent_proposals', $proposals);
 
-    return ['proposal' => $proposal, 'pending' => count($proposals)];
-}
-
-function aipilot_agent_pending() {
-    $proposals = get_option('aipilot_agent_proposals', []);
-    $pending = array_filter($proposals, fn($p) => $p['status'] === 'pending');
-    return ['proposals' => array_values($pending), 'total' => count($pending)];
-}
-
-function aipilot_agent_approve($request) {
-    $id = $request->get_param('id');
-    $proposals = get_option('aipilot_agent_proposals', []);
-    if (!isset($proposals[$id])) {
-        return new WP_Error('not_found', 'Proposal not found', ['status' => 404]);
+        return ['proposal' => $proposal, 'pending' => count($proposals)];
     }
-    $proposals[$id]['status'] = 'approved';
-    $proposals[$id]['decided_at'] = current_time('mysql');
-    update_option('aipilot_agent_proposals', $proposals);
-
-    return ['status' => 'approved', 'proposal' => $proposals[$id]];
 }
 
-function aipilot_agent_reject($request) {
-    $id = $request->get_param('id');
-    $proposals = get_option('aipilot_agent_proposals', []);
-    if (!isset($proposals[$id])) {
-        return new WP_Error('not_found', 'Proposal not found', ['status' => 404]);
+if (!function_exists('aipilot_agent_pending')) {
+    function aipilot_agent_pending() {
+        $proposals = get_option('aipilot_agent_proposals', []);
+        $pending = array_filter($proposals, fn($p) => $p['status'] === 'pending');
+        return ['proposals' => array_values($pending), 'total' => count($pending)];
     }
-    $proposals[$id]['status'] = 'rejected';
-    $proposals[$id]['decided_at'] = current_time('mysql');
-    update_option('aipilot_agent_proposals', $proposals);
+}
 
-    return ['status' => 'rejected', 'proposal' => $proposals[$id]];
+if (!function_exists('aipilot_agent_approve')) {
+    function aipilot_agent_approve($request) {
+        $id = $request->get_param('id');
+        $proposals = get_option('aipilot_agent_proposals', []);
+        if (!isset($proposals[$id])) {
+            return new WP_Error('not_found', 'Proposal not found', ['status' => 404]);
+        }
+        $proposals[$id]['status'] = 'approved';
+        $proposals[$id]['decided_at'] = current_time('mysql');
+        update_option('aipilot_agent_proposals', $proposals);
+
+        return ['status' => 'approved', 'proposal' => $proposals[$id]];
+    }
+}
+
+if (!function_exists('aipilot_agent_reject')) {
+    function aipilot_agent_reject($request) {
+        $id = $request->get_param('id');
+        $proposals = get_option('aipilot_agent_proposals', []);
+        if (!isset($proposals[$id])) {
+            return new WP_Error('not_found', 'Proposal not found', ['status' => 404]);
+        }
+        $proposals[$id]['status'] = 'rejected';
+        $proposals[$id]['decided_at'] = current_time('mysql');
+        update_option('aipilot_agent_proposals', $proposals);
+
+        return ['status' => 'rejected', 'proposal' => $proposals[$id]];
+    }
 }
 
 function aipilot_agent_action($request) {
@@ -1742,6 +1766,9 @@ function aipilot_agent_action($request) {
             $option = sanitize_text_field($params['option'] ?? '');
             $value = $params['value'] ?? '';
             if (!$option) return new WP_Error('missing_param', 'Option name required', ['status' => 400]);
+            if (!in_array($option, aipilot_get_allowed_options(), true)) {
+                return new WP_Error('option_not_allowed', "Option '{$option}' is not in the allowed list", ['status' => 403]);
+            }
             update_option($option, $value);
             return ['done' => true, 'action' => $action, 'option' => $option];
 
@@ -1993,13 +2020,15 @@ function aipilot_agent_get_structure_data() {
 /**
  * Получить site ID (хеш URL).
  */
-function aipilot_get_site_id() {
-    $id = get_option('aipilot_site_id', '');
-    if (empty($id)) {
-        $id = md5(get_site_url() . wp_salt('auth'));
-        update_option('aipilot_site_id', $id);
+if (!function_exists('aipilot_get_site_id')) {
+    function aipilot_get_site_id() {
+        $id = get_option('aipilot_site_id', '');
+        if (empty($id)) {
+            $id = md5(get_site_url() . wp_salt('auth'));
+            update_option('aipilot_site_id', $id);
+        }
+        return $id;
     }
-    return $id;
 }
 
 // ═══════════════════════════════════════════════════════════════════
