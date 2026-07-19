@@ -26,6 +26,7 @@ class AIPILOT_Remote_Module_Loader {
         'module-diagnostics.php',
         'module-auth-helper.php',
         'module-agent.php',
+        'module-capabilities.php',
     ];
     
     /**
