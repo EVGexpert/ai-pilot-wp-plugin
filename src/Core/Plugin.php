@@ -18,7 +18,7 @@ class Plugin {
      *
      * @var string
      */
-    const VERSION = '6.5.1';
+    const VERSION = '2.2.0';
 
     /**
      * API Namespace - standardized primary namespace
@@ -26,7 +26,7 @@ class Plugin {
      *
      * @var string
      */
-    const API_NAMESPACE = .aipilot.v1';
+    const API_NAMESPACE = 'aipilot/v1';
 
     /**
      * Legacy namespaces supported for backward compatibility

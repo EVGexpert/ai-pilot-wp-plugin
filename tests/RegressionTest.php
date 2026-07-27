@@ -19,6 +19,7 @@ class RegressionTest {
     /** List of every agent endpoint expected from the spec. */
     const AGENT_ENDPOINTS = [
         ['POST', '/agent/connect-code'],
+        ['GET',  '/agent/connection-status'],
         ['GET',  '/agent/verify-code'],
         ['GET',  '/agent/context'],
         ['GET',  '/agent/scan'],
@@ -142,12 +143,14 @@ class RegressionTest {
         TestHelpers::pass();
     }
 
-    public function test_13_connect_code_route_is_public() {
+    public function test_13_connect_code_route_requires_admin() {
         TestHelpers::resetState();
         TestHelpers::loadPlugin();
-        // connect-code must NOT require token (admin generates it)
-        $result = TestHelpers::invokePermission('POST', '/agent/connect-code');
-        TestHelpers::assertTrue($result);
+        TestHelpers::assertTrue(TestHelpers::invokePermission('POST', '/agent/connect-code'));
+
+        TestHelpers::overrideCurrentUserCan(false);
+        $denied = TestHelpers::invokePermission('POST', '/agent/connect-code');
+        TestHelpers::assertWPError($denied, 'aipilot_admin_required');
     }
 
     public function test_14_protected_route_denies_without_token() {
@@ -269,16 +272,17 @@ class RegressionTest {
         TestHelpers::assertArrayHasKey('connect_url', $result);
     }
 
-    public function test_26_connect_code_stores_hash_and_token() {
+    public function test_26_connect_code_keeps_token_provisional_until_verify() {
         TestHelpers::resetState();
         TestHelpers::loadPlugin();
         $result = TestHelpers::invokeRoute('POST', '/agent/connect-code');
-        TestHelpers::assertTrue(get_option('aipilot_api_token_hash') !== '');
-        TestHelpers::assertTrue(get_option('aipilot_last_token') !== '');
+        TestHelpers::assertEqual('', get_option('aipilot_api_token_hash', ''));
+        TestHelpers::assertEqual('', get_option('aipilot_last_token', ''));
         $codes = get_option('aipilot_connect_codes', []);
         TestHelpers::assertArrayHasKey($result['code'], $codes);
         $entry = $codes[$result['code']];
         TestHelpers::assertFalse($entry['used']);
+        TestHelpers::assertTrue(!empty($entry['token']));
         TestHelpers::assertGreaterThanOrEqual(time(), $entry['expires'] - 200);
     }
 
@@ -292,6 +296,12 @@ class RegressionTest {
         TestHelpers::assertArrayHasKey('token', $result);
         TestHelpers::assertArrayHasKey('site_url', $result);
         TestHelpers::assertArrayHasKey('site_name', $result);
+        TestHelpers::assertTrue(get_option('aipilot_api_token_hash', '') !== '');
+        TestHelpers::assertEqual(get_site_url(), get_option('aipilot_connected_site', ''));
+        TestHelpers::assertTrue(get_option('aipilot_connected_at', '') !== '');
+        TestHelpers::assertTrue(aipilot_get_capabilities()['full_access']);
+        $codes = get_option('aipilot_connect_codes', []);
+        TestHelpers::assertFalse(isset($codes[$code]['token']));
     }
 
     public function test_28_verify_code_rejects_missing_code() {
@@ -465,17 +475,26 @@ class RegressionTest {
         TestHelpers::assertEqual(2, $result['total']);
     }
 
-    public function test_41_approve_marks_proposal_approved() {
+    public function test_41_approve_executes_create_post_and_returns_result() {
         TestHelpers::resetState();
         TestHelpers::loadPlugin();
-        $created = TestHelpers::invokeRoute('POST', '/agent/propose', ['action' => 'update_post']);
+        $created = TestHelpers::invokeRoute('POST', '/agent/propose', [
+            'action' => 'create_post',
+            'params' => ['title' => 'Approved draft', 'content' => '<p>Body</p>', 'status' => 'draft'],
+        ]);
         $id = $created['proposal']['id'];
 
         $result = TestHelpers::invokeParamRoute('POST', '/agent/approve/(?P<id>[a-f0-9-]+)', ['id' => $id]);
         TestHelpers::assertNotWPError($result);
-        TestHelpers::assertEqual('approved', $result['status']);
-        TestHelpers::assertEqual('approved', $result['proposal']['status']);
-        TestHelpers::assertNotEqual(null, $result['proposal']['decided_at']);
+        TestHelpers::assertTrue($result['approved']);
+        TestHelpers::assertEqual('completed', $result['status']);
+        TestHelpers::assertEqual('completed', $result['proposal']['status']);
+        TestHelpers::assertTrue($result['proposal']['result']['success']);
+        TestHelpers::assertGreaterThan(0, $result['proposal']['result']['id']);
+        $post = get_post($result['proposal']['result']['id']);
+        TestHelpers::assertEqual('Approved draft', $post->post_title);
+        TestHelpers::assertEqual('<p>Body</p>', $post->post_content);
+        TestHelpers::assertEqual('draft', $post->post_status);
     }
 
     public function test_42_reject_marks_proposal_rejected() {
@@ -559,15 +578,14 @@ class RegressionTest {
         TestHelpers::assertEqual('publish', $post->post_status);
     }
 
-    public function test_48_action_create_post_defaults_status_to_draft() {
+    public function test_48_action_create_post_rejects_invalid_status() {
         TestHelpers::resetState();
         TestHelpers::loadPlugin();
         $result = TestHelpers::invokeRoute('POST', '/agent/action', [
             'action' => 'create_post',
             'params' => ['title' => 'X', 'content' => 'Y', 'status' => 'invalid'],
         ]);
-        $post = get_post($result['post_id']);
-        TestHelpers::assertEqual('draft', $post->post_status);
+        TestHelpers::assertWPError($result, 'aipilot_invalid_status');
     }
 
     public function test_49_action_update_option_writes_option() {
@@ -833,4 +851,112 @@ class RegressionTest {
         $result = TestHelpers::invokePermission('GET', '/agent/scan');
         TestHelpers::assertTrue($result);
     }
+
+    public function test_71_connection_status_route_registered() {
+        TestHelpers::resetState();
+        TestHelpers::loadPlugin();
+        TestHelpers::assertTrue(TestHelpers::routeExists('GET', '/agent/connection-status'));
+    }
+
+    public function test_72_connection_status_becomes_connected_after_verify() {
+        TestHelpers::resetState();
+        TestHelpers::loadPlugin();
+        $code = TestHelpers::generateConnectCode();
+        $before = TestHelpers::invokeRoute('GET', '/agent/connection-status', ['code' => $code]);
+        TestHelpers::assertFalse($before['connected']);
+        TestHelpers::invokeRoute('GET', '/agent/verify-code', ['code' => $code]);
+        $after = TestHelpers::invokeRoute('GET', '/agent/connection-status', ['code' => $code]);
+        TestHelpers::assertTrue($after['connected']);
+        TestHelpers::assertTrue($after['code_used']);
+    }
+
+    public function test_76_reconnect_status_waits_for_current_code() {
+        TestHelpers::resetState();
+        TestHelpers::loadPlugin();
+
+        // Simulate a site that is already connected with an existing token.
+        update_option('aipilot_connected_site', 'https://example.com');
+        update_option('aipilot_connected_at', '2026-07-27 10:00:00');
+        update_option('aipilot_api_token_hash', 'existing-hash');
+
+        $code = TestHelpers::generateConnectCode();
+        $before = TestHelpers::invokeRoute('GET', '/agent/connection-status', ['code' => $code]);
+        TestHelpers::assertFalse($before['connected']);
+        TestHelpers::assertFalse($before['code_used']);
+
+        TestHelpers::invokeRoute('GET', '/agent/verify-code', ['code' => $code]);
+        $after = TestHelpers::invokeRoute('GET', '/agent/connection-status', ['code' => $code]);
+        TestHelpers::assertTrue($after['connected']);
+        TestHelpers::assertTrue($after['code_used']);
+    }
+
+    public function test_73_proposal_accepts_nested_target_patch_contract() {
+        TestHelpers::resetState();
+        TestHelpers::loadPlugin();
+        $created = TestHelpers::invokeRoute('POST', '/agent/propose', [
+            'action' => 'create_post',
+            'summary' => 'Nested contract',
+            'params' => [
+                'target' => ['title' => 'Nested title', 'content' => '<p>Nested body</p>'],
+                'patch' => ['status' => 'private'],
+            ],
+        ]);
+        $params = $created['proposal']['params'];
+        TestHelpers::assertEqual('Nested title', $params['title']);
+        TestHelpers::assertEqual('<p>Nested body</p>', $params['content']);
+        TestHelpers::assertEqual('private', $params['status']);
+    }
+
+    public function test_74_repeated_approve_is_idempotent() {
+        TestHelpers::resetState();
+        TestHelpers::loadPlugin();
+        $created = TestHelpers::invokeRoute('POST', '/agent/propose', [
+            'action' => 'create_post',
+            'params' => ['title' => 'Once', 'content' => 'Only once', 'status' => 'draft'],
+        ]);
+        $id = $created['proposal']['id'];
+        $first = TestHelpers::invokeParamRoute('POST', '/agent/approve/(?P<id>[a-f0-9-]+)', ['id' => $id]);
+        $countAfterFirst = count($GLOBALS['aipilot_posts']);
+        $second = TestHelpers::invokeParamRoute('POST', '/agent/approve/(?P<id>[a-f0-9-]+)', ['id' => $id]);
+        TestHelpers::assertEqual($countAfterFirst, count($GLOBALS['aipilot_posts']));
+        TestHelpers::assertEqual($first['proposal']['result']['id'], $second['proposal']['result']['id']);
+    }
+
+    public function test_75_create_post_requires_title_and_content() {
+        TestHelpers::resetState();
+        TestHelpers::loadPlugin();
+        $noTitle = TestHelpers::invokeRoute('POST', '/agent/action', [
+            'action' => 'create_post',
+            'params' => ['content' => 'Body'],
+        ]);
+        TestHelpers::assertWPError($noTitle, 'aipilot_title_required');
+
+        $noContent = TestHelpers::invokeRoute('POST', '/agent/action', [
+            'action' => 'create_post',
+            'params' => ['title' => 'Title'],
+        ]);
+        TestHelpers::assertWPError($noContent, 'aipilot_content_required');
+    }
+
+
+    public function test_77_proposal_lock_blocks_concurrent_approve() {
+        TestHelpers::resetState();
+        TestHelpers::loadPlugin();
+
+        $created = TestHelpers::invokeRoute('POST', '/agent/propose', [
+            'action' => 'create_post',
+            'params' => [
+                'title' => 'Locked proposal',
+                'content' => '<p>Must not execute while locked.</p>',
+                'status' => 'draft',
+            ],
+        ]);
+        $id = $created['proposal']['id'];
+        add_option('aipilot_proposal_lock_' . md5($id), time(), '', false);
+
+        $result = TestHelpers::invokeParamRoute('POST', '/agent/approve/(?P<id>[a-f0-9-]+)', ['id' => $id]);
+        TestHelpers::assertWPError($result, 'proposal_processing');
+        TestHelpers::assertEqual(0, count($GLOBALS['aipilot_posts']));
+    }
+
 }

@@ -1,30 +1,56 @@
-=== AI Pilot - Remote Site API ===
+=== AI Pilot — Remote Site API ===
 Contributors: aipilot
-Tags: api, remote, ai-pilot, automation
+Tags: ai, automation, remote management, content, assistant
 Requires at least: 5.6
-Tested up to: 6.9
-Stable tag: 1.0.0
+Tested up to: 7.0
+Requires PHP: 7.4
+Stable tag: 2.2.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
-Extend WordPress REST API to support remote site management, plugin updates, and automation via AI Pilot agent ecosystem.
+Подключает WordPress-сайт к AI Pilot и позволяет безопасно управлять контентом через диалог с подтверждением изменений.
 
 == Description ==
 
-AI Pilot - Remote Site API provides a secure bridge between your WordPress environment and the AI Pilot agent ecosystem. It extends the WordPress REST API to support remote site management, plugin updates, and AI-driven automation.
+AI Pilot — Remote Site API создаёт защищённый REST-мост между WordPress и AI Pilot.
+
+Возможности:
+
+* подключение сайта к AI Pilot в один клик;
+* отдельный раздел AI Pilot в главном меню WordPress;
+* работа с записями, страницами, категориями, тегами, меню, темами и плагинами;
+* предложения действий с подтверждением перед выполнением;
+* идемпотентное выполнение — повторное подтверждение не создаёт дубликаты;
+* гибкие разрешения и настройка поведения ассистента;
+* поддержка основного namespace `aipilot/v1` и legacy namespace `openclaw/v1`.
 
 == Installation ==
 
-1. Upload the `ai-pilot-plugin` folder to the `/wp-content/plugins/` directory.
-2. Activate the plugin through the 'Plugins' menu in WordPress.
-3. Configure your API token in the 'AI Pilot Remote API' settings page.
+1. Сделайте резервную копию установленного плагина.
+2. Загрузите папку `ai-pilot-wp-plugin` в `/wp-content/plugins/` или замените содержимое текущей папки плагина.
+3. Активируйте плагин.
+4. Откройте отдельный пункт **AI Pilot** в левом меню WordPress.
+5. Нажмите **Подключить AI Pilot** и войдите в аккаунт. Окно авторизации закроется автоматически после подключения.
+
+== Upgrade Notice ==
+
+= 2.2.0 =
+Обновляет контракт proposal/approve: подтверждение теперь действительно выполняет сохранённое действие и возвращает результат. Перед обновлением рекомендуется сделать backup каталога плагина.
 
 == Changelog ==
 
-= 1.0.0 =
-* Initial release of AI Pilot - Remote Site API
-* Full REST API for WordPress site management
-* Media management with security validations
-* Site health and diagnostics endpoints
-* Granular permissions system
-* Secure token-based authentication
+= 2.2.0 =
+* Новый современный интерфейс в отдельном разделе AI Pilot главного меню WordPress.
+* Подключение в один клик с одноразовым кодом, автоматической проверкой и закрытием окна авторизации.
+* Токен активируется только после успешной авторизации; отменённое переподключение больше не ломает действующее соединение.
+* `approve/{id}` выполняет сохранённое действие, сохраняет result и возвращает ID созданного объекта.
+* Повторный approve идемпотентен и не создаёт дубликаты.
+* Одновременные approve-запросы блокируются отдельным DB-lock для proposal.
+* `create_post` проверяет заголовок, контент и допустимый статус.
+* Поддержаны оба формата параметров Auth API: плоский и `{target, patch}`.
+* Legacy `/agent/action` сохранён и использует тот же исполнитель действий.
+* Добавлен admin-only endpoint `/agent/connection-status`.
+* Добавлены тесты proposal flow, подключения и обратной совместимости.
+
+= 2.1.1 =
+* Предыдущая production-версия API-коннектора.

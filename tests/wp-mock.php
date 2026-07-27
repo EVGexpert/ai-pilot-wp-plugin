@@ -18,6 +18,8 @@
 
 if (!defined('ABSPATH')) define('ABSPATH', __DIR__ . '/');
 if (!defined('AI_PILOT_TEST_MODE')) define('AI_PILOT_TEST_MODE', true);
+if (!defined('OBJECT')) define('OBJECT', 'OBJECT');
+if (!defined('ARRAY_A')) define('ARRAY_A', 'ARRAY_A');
 
 // ─── GLOBAL DATA STORES ──────────────────────────────────────────────
 
@@ -166,6 +168,10 @@ function admin_url($path = '') {
 function get_permalink($post_id = 0) {
     return 'https://example.test/?p=' . intval($post_id);
 }
+function get_post_status($post_id = 0) {
+    $post = get_post($post_id);
+    return $post ? $post->post_status : false;
+}
 
 function get_page_template_slug($post_id) {
     return '';
@@ -181,6 +187,14 @@ function get_option($key, $default = false) {
 }
 
 function update_option($key, $value, $autoload = null) {
+    $GLOBALS['wp_options'][$key] = $value;
+    return true;
+}
+
+function add_option($key, $value = '', $deprecated = '', $autoload = 'yes') {
+    if (array_key_exists($key, $GLOBALS['wp_options'])) {
+        return false;
+    }
     $GLOBALS['wp_options'][$key] = $value;
     return true;
 }
@@ -339,6 +353,11 @@ function wp_set_post_categories($post_id, $cat_ids = []) {
     $GLOBALS['aipilot_post_cats'][$post_id] = array_map('intval', (array) $cat_ids);
 }
 
+function wp_set_post_tags($post_id, $tags = [], $append = false) {
+    $GLOBALS['aipilot_post_tags'][$post_id] = (array) $tags;
+    return $GLOBALS['aipilot_post_tags'][$post_id];
+}
+
 // ─── CATEGORIES / TAGS / TAXONOMY ────────────────────────────────────
 
 function get_categories($args = []) {
@@ -425,7 +444,7 @@ function get_users($args = []) {
 
 function get_plugins() {
     return [
-        'ai-pilot/ai-pilot-plugin.php' => ['Name' => 'AI Pilot', 'Version' => '2.1.1'],
+        'ai-pilot/ai-pilot-plugin.php' => ['Name' => 'AI Pilot', 'Version' => '2.2.0'],
     ];
 }
 
@@ -542,6 +561,7 @@ function wp_unslash($v) {
     return is_string($v) ? stripslashes($v) : $v;
 }
 function wp_kses_post($v) { return $v; }
+function wp_strip_all_tags($v, $remove_breaks = false) { return trim(strip_tags((string) $v)); }
 function wp_trim_words($text, $num_words = 55, $more = null) {
     $words = explode(' ', (string) $text);
     return implode(' ', array_slice($words, 0, $num_words));

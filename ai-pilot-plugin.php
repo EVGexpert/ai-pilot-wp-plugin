@@ -2,11 +2,11 @@
 /**
  * Plugin Name: AI Pilot – Remote Site API
  * Description: REST API для удалённого управления WordPress-сайтами через AI Pilot
- * Version: 2.1.1
+ * Version: 2.2.0
  * Author: AI Pilot
  * License: GPLv2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
- * Tested up to: 6.9
+ * Tested up to: 7.0
  * Text Domain: ai-pilot
  *
  * AI Pilot – Remote Site API
@@ -17,7 +17,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('AI_PILOT_VERSION', '2.1.1');
+define('AI_PILOT_VERSION', '2.2.0');
 define('AI_PILOT_PLUGIN_FILE', __FILE__);
 define('AI_PILOT_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AI_PILOT_PLUGIN_URL', plugin_dir_url(__FILE__));
@@ -1440,7 +1440,13 @@ add_action('rest_api_init', function() {
     aipilot_register_route('/agent/connect-code', [
         'methods'             => 'POST',
         'callback'            => 'aipilot_agent_connect_code',
-        'permission_callback' => '__return_true',
+        'permission_callback' => 'aipilot_admin_rest_permission',
+    ]);
+
+    aipilot_register_route('/agent/connection-status', [
+        'methods'             => 'GET',
+        'callback'            => 'aipilot_agent_connection_status',
+        'permission_callback' => 'aipilot_admin_rest_permission',
     ]);
 
     aipilot_register_route('/agent/verify-code', [
@@ -1450,55 +1456,128 @@ add_action('rest_api_init', function() {
     ]);
 });
 
-function aipilot_agent_connect_code() {
-    // Всегда генерируем новый токен (ротация при переподключении)
-    $token      = wp_generate_password(64, false);
-    $token_hash = wp_hash($token);
-    update_option('aipilot_api_token_hash', $token_hash);
-    update_option('aipilot_last_token', $token);
+function aipilot_admin_rest_permission() {
+    if (current_user_can('manage_options')) {
+        return true;
+    }
 
+    return new WP_Error(
+        'aipilot_admin_required',
+        'Administrator permission required',
+        ['status' => 403]
+    );
+}
+
+/**
+ * Generate a one-time connection code.
+ *
+ * The new token remains provisional until verify-code is consumed, so an
+ * abandoned reconnect attempt cannot invalidate the current integration.
+ */
+function aipilot_agent_connect_code() {
+    $token = wp_generate_password(64, false);
     $code = wp_generate_password(8, false);
-    $expires = time() + 300; // 5 минут
+    $expires = time() + 300;
 
     $codes = get_option('aipilot_connect_codes', []);
-    $codes[$code] = [
-        'expires'  => $expires,
-        'used'     => false,
-        'token'    => $token,
-        'site_url' => get_site_url(),
-        'site_name' => get_bloginfo('name'),
-    ];
-    // Чистим просроченные
-    foreach ($codes as $k => $v) {
-        if ($v['expires'] < time()) unset($codes[$k]);
+    if (!is_array($codes)) {
+        $codes = [];
     }
-    update_option('aipilot_connect_codes', $codes);
 
-    return ['code' => $code, 'expires_in' => 300, 'connect_url' => add_query_arg('code', $code, 'https://chat.pilotsite.ru/connect')];
+    foreach ($codes as $key => $entry) {
+        if (($entry['expires'] ?? 0) < time() || !empty($entry['used'])) {
+            unset($codes[$key]);
+        }
+    }
+
+    $codes[$code] = [
+        'expires'   => $expires,
+        'used'      => false,
+        'token'     => $token,
+        'site_url'  => get_site_url(),
+        'site_name' => get_bloginfo('name'),
+        'created_at'=> current_time('mysql'),
+    ];
+    update_option('aipilot_connect_codes', $codes, false);
+
+    return [
+        'code'        => $code,
+        'expires_in'  => 300,
+        'connect_url' => add_query_arg('code', $code, 'https://chat.pilotsite.ru/connect'),
+    ];
+}
+
+/**
+ * Admin-only polling endpoint used by the one-click connection screen.
+ */
+function aipilot_agent_connection_status($request) {
+    $code = sanitize_text_field($request->get_param('code') ?: '');
+    $codes = get_option('aipilot_connect_codes', []);
+    $entry = ($code !== '' && is_array($codes) && isset($codes[$code])) ? $codes[$code] : null;
+
+    $site_connected = get_option('aipilot_connected_site', '') !== ''
+        && get_option('aipilot_api_token_hash', '') !== '';
+    $code_used = is_array($entry) && !empty($entry['used']);
+
+    // When polling a reconnect attempt, report success only for this exact
+    // one-time code. An already connected site must not close the auth popup
+    // before the new code has actually been consumed.
+    $connected = $code !== '' ? $code_used : $site_connected;
+
+    return [
+        'connected'   => $connected,
+        'site_url'    => $site_connected ? get_option('aipilot_connected_site', get_site_url()) : get_site_url(),
+        'connected_at'=> $site_connected ? get_option('aipilot_connected_at', '') : '',
+        'code_used'   => $code_used,
+        'expired'     => is_array($entry) ? (($entry['expires'] ?? 0) < time()) : false,
+    ];
 }
 
 function aipilot_agent_verify_code($request) {
     $code = sanitize_text_field($request->get_param('code'));
-    if (empty($code)) return new WP_Error('missing_code', 'Code required', ['status' => 400]);
+    if (empty($code)) {
+        return new WP_Error('missing_code', 'Code required', ['status' => 400]);
+    }
 
     $codes = get_option('aipilot_connect_codes', []);
-    if (!isset($codes[$code])) return new WP_Error('invalid_code', 'Invalid or expired code', ['status' => 404]);
+    if (!is_array($codes) || !isset($codes[$code])) {
+        return new WP_Error('invalid_code', 'Invalid or expired code', ['status' => 404]);
+    }
 
     $entry = $codes[$code];
-    if ($entry['used'] || $entry['expires'] < time()) {
+    if (!empty($entry['used']) || ($entry['expires'] ?? 0) < time()) {
         return new WP_Error('expired_code', 'Code expired', ['status' => 410]);
     }
 
-    // Помечаем как использованный
+    $token = (string) ($entry['token'] ?? '');
+    if ($token === '') {
+        return new WP_Error('invalid_code', 'Connection token missing', ['status' => 500]);
+    }
+
+    // Activate the token only after successful authorization.
+    update_option('aipilot_api_token_hash', wp_hash($token));
+    delete_option('aipilot_last_token');
+
+    // First-time setup must be ready for proposal-driven management.
+    $capabilities = aipilot_get_capabilities();
+    $capabilities['full_access'] = true;
+    update_option('aipilot_api_capabilities', $capabilities);
+
+    update_option('aipilot_connected_site', get_site_url());
+    update_option('aipilot_connected_at', current_time('mysql'));
+
     $entry['used'] = true;
+    $entry['used_at'] = current_time('mysql');
+    unset($entry['token']);
     $codes[$code] = $entry;
-    update_option('aipilot_connect_codes', $codes);
+    update_option('aipilot_connect_codes', $codes, false);
 
     return [
         'verified'  => true,
         'site_url'  => $entry['site_url'],
         'site_name' => $entry['site_name'],
-        'token'     => $entry['token'],
+        'token'     => $token,
+        'plugin_version' => AI_PILOT_VERSION,
     ];
 }
 
@@ -1678,110 +1757,197 @@ add_action('rest_api_init', function() {
     ]);
 });
 
+/**
+ * Normalize proposal params across Auth API generations.
+ *
+ * Auth API 0.5.3 sends {target, patch}; 0.5.4 sends a flat object for
+ * create_post. The plugin accepts both but stores a single canonical shape.
+ */
+function aipilot_normalize_agent_action_params($action, $params) {
+    $params = is_array($params) ? $params : [];
+
+    if ($action === 'create_post' && (isset($params['target']) || isset($params['patch']))) {
+        $target = isset($params['target']) && is_array($params['target']) ? $params['target'] : [];
+        $patch = isset($params['patch']) && is_array($params['patch']) ? $params['patch'] : [];
+        return array_merge($target, $patch);
+    }
+
+    return $params;
+}
+
 if (!function_exists('aipilot_agent_propose')) {
     function aipilot_agent_propose($request) {
+        $action = sanitize_key($request->get_param('action') ?: 'unknown');
+        $description = sanitize_text_field(
+            $request->get_param('description')
+                ?: $request->get_param('summary')
+                ?: ''
+        );
+        $params = aipilot_normalize_agent_action_params(
+            $action,
+            $request->get_param('params') ?: []
+        );
+
         $proposal = [
             'id'          => wp_generate_uuid4(),
-            'action'      => sanitize_text_field($request->get_param('action') ?: 'unknown'),
-            'description' => sanitize_text_field($request->get_param('description') ?: ''),
-            'params'      => $request->get_param('params') ?: [],
+            'action'      => $action,
+            'description' => $description,
+            'summary'     => $description,
+            'params'      => $params,
             'diff'        => $request->get_param('diff') ?: '',
             'status'      => 'pending',
             'created_at'  => current_time('mysql'),
             'decided_at'  => null,
+            'completed_at'=> null,
+            'result'      => null,
+            'error'       => null,
             'agent'       => sanitize_text_field($request->get_param('agent') ?: 'subagent'),
         ];
 
         $proposals = get_option('aipilot_agent_proposals', []);
+        if (!is_array($proposals)) {
+            $proposals = [];
+        }
         $proposals[$proposal['id']] = $proposal;
-        update_option('aipilot_agent_proposals', $proposals);
+        // Keep storage bounded without losing the most recent proposals.
+        if (count($proposals) > 100) {
+            $proposals = array_slice($proposals, -100, null, true);
+        }
+        update_option('aipilot_agent_proposals', $proposals, false);
 
-        return ['proposal' => $proposal, 'pending' => count($proposals)];
+        do_action('aipilot_proposal_created', $proposal);
+
+        return ['proposal' => $proposal, 'pending' => count(array_filter($proposals, function ($item) {
+            return ($item['status'] ?? '') === 'pending';
+        }))];
     }
 }
 
 if (!function_exists('aipilot_agent_pending')) {
     function aipilot_agent_pending() {
         $proposals = get_option('aipilot_agent_proposals', []);
-        $pending = array_filter($proposals, fn($p) => $p['status'] === 'pending');
+        if (!is_array($proposals)) {
+            $proposals = [];
+        }
+        $pending = array_filter($proposals, function ($proposal) {
+            return ($proposal['status'] ?? '') === 'pending';
+        });
         return ['proposals' => array_values($pending), 'total' => count($pending)];
     }
 }
 
-if (!function_exists('aipilot_agent_approve')) {
-    function aipilot_agent_approve($request) {
-        $id = $request->get_param('id');
-        $proposals = get_option('aipilot_agent_proposals', []);
-        if (!isset($proposals[$id])) {
-            return new WP_Error('not_found', 'Proposal not found', ['status' => 404]);
-        }
-        $proposals[$id]['status'] = 'approved';
-        $proposals[$id]['decided_at'] = current_time('mysql');
-        update_option('aipilot_agent_proposals', $proposals);
-
-        return ['status' => 'approved', 'proposal' => $proposals[$id]];
-    }
-}
-
-if (!function_exists('aipilot_agent_reject')) {
-    function aipilot_agent_reject($request) {
-        $id = $request->get_param('id');
-        $proposals = get_option('aipilot_agent_proposals', []);
-        if (!isset($proposals[$id])) {
-            return new WP_Error('not_found', 'Proposal not found', ['status' => 404]);
-        }
-        $proposals[$id]['status'] = 'rejected';
-        $proposals[$id]['decided_at'] = current_time('mysql');
-        update_option('aipilot_agent_proposals', $proposals);
-
-        return ['status' => 'rejected', 'proposal' => $proposals[$id]];
-    }
-}
-
-function aipilot_agent_action($request) {
-    $action = sanitize_text_field($request->get_param('action') ?: '');
-    $params = $request->get_param('params') ?: [];
+/**
+ * Execute a trusted, server-stored action.
+ *
+ * @return array|WP_Error Canonical result object.
+ */
+function aipilot_execute_agent_action($action, $params) {
+    $action = sanitize_key($action);
+    $params = aipilot_normalize_agent_action_params($action, $params);
 
     switch ($action) {
+        case 'create_post':
+            $title = sanitize_text_field($params['title'] ?? '');
+            $content = wp_kses_post($params['content'] ?? '');
+            $status = sanitize_key($params['status'] ?? 'draft');
+            $allowed_statuses = ['draft', 'publish', 'pending', 'private'];
+
+            if ($title === '') {
+                return new WP_Error('aipilot_title_required', 'Post title is required', ['status' => 400]);
+            }
+            if (trim(wp_strip_all_tags($content)) === '' && trim($content) === '') {
+                return new WP_Error('aipilot_content_required', 'Post content is required', ['status' => 400]);
+            }
+            if (!in_array($status, $allowed_statuses, true)) {
+                return new WP_Error('aipilot_invalid_status', 'Invalid post status', ['status' => 400]);
+            }
+
+            $type = sanitize_key($params['type'] ?? 'post');
+            if (!in_array($type, ['post', 'page'], true)) {
+                $type = 'post';
+            }
+
+            $post_data = [
+                'post_title'   => $title,
+                'post_content' => $content,
+                'post_status'  => $status,
+                'post_type'    => $type,
+                'post_excerpt' => sanitize_text_field($params['excerpt'] ?? ''),
+            ];
+            if (!empty($params['slug'])) {
+                $post_data['post_name'] = sanitize_title($params['slug']);
+            }
+
+            $post_id = wp_insert_post($post_data, true);
+            if (is_wp_error($post_id)) {
+                return $post_id;
+            }
+            $post_id = (int) $post_id;
+            if ($post_id <= 0) {
+                return new WP_Error('aipilot_post_create_failed', 'WordPress did not return a post ID', ['status' => 500]);
+            }
+
+            if ($type === 'post' && !empty($params['categories']) && function_exists('wp_set_post_categories')) {
+                wp_set_post_categories($post_id, array_map('intval', (array) $params['categories']));
+            }
+            if ($type === 'post' && !empty($params['tags']) && function_exists('wp_set_post_tags')) {
+                wp_set_post_tags($post_id, array_map('sanitize_text_field', (array) $params['tags']));
+            }
+
+            return [
+                'success' => true,
+                'id'      => $post_id,
+                'post_id' => $post_id,
+                'type'    => $type,
+                'status'  => get_post_status($post_id),
+                'url'     => get_permalink($post_id),
+            ];
+
         case 'update_post':
-            $post_id = intval($params['post_id'] ?? 0);
-            $data = $params['data'] ?? [];
+            $post_id = (int) ($params['post_id'] ?? $params['id'] ?? 0);
+            $data = isset($params['data']) && is_array($params['data']) ? $params['data'] : $params;
             if (!$post_id || !get_post($post_id)) {
                 return new WP_Error('not_found', 'Post not found', ['status' => 404]);
             }
+            unset($data['post_id'], $data['id']);
             $result = wp_update_post(array_merge(['ID' => $post_id], $data), true);
-            return ['done' => true, 'action' => $action, 'post_id' => $post_id, 'result' => $result];
-
-        case 'create_post':
-            $post_data = [
-                'post_title'   => sanitize_text_field($params['title'] ?? ''),
-                'post_content' => wp_kses_post($params['content'] ?? ''),
-                'post_status'  => in_array($params['status'] ?? '', ['publish', 'draft']) ? $params['status'] : 'draft',
-                'post_type'    => sanitize_text_field($params['type'] ?? 'post'),
+            if (is_wp_error($result)) {
+                return $result;
+            }
+            return [
+                'success' => true,
+                'id'      => $post_id,
+                'post_id' => $post_id,
+                'status'  => get_post_status($post_id),
+                'url'     => get_permalink($post_id),
             ];
-            $post_id = wp_insert_post($post_data, true);
-            return ['done' => true, 'action' => $action, 'post_id' => $post_id];
 
         case 'update_option':
             $option = sanitize_text_field($params['option'] ?? '');
             $value = $params['value'] ?? '';
-            if (!$option) return new WP_Error('missing_param', 'Option name required', ['status' => 400]);
+            if (!$option) {
+                return new WP_Error('missing_param', 'Option name required', ['status' => 400]);
+            }
             if (!in_array($option, aipilot_get_allowed_options(), true)) {
                 return new WP_Error('option_not_allowed', "Option '{$option}' is not in the allowed list", ['status' => 403]);
             }
             update_option($option, $value);
-            return ['done' => true, 'action' => $action, 'option' => $option];
+            return ['success' => true, 'option' => $option];
 
         case 'switch_theme':
             $theme = sanitize_text_field($params['theme'] ?? '');
-            if (!$theme) return new WP_Error('missing_param', 'Theme required', ['status' => 400]);
+            if (!$theme) {
+                return new WP_Error('missing_param', 'Theme required', ['status' => 400]);
+            }
             switch_theme($theme);
-            return ['done' => true, 'action' => $action, 'theme' => $theme];
+            return ['success' => true, 'theme' => $theme];
 
         case 'update_menu':
-            $menu_id = intval($params['menu_id'] ?? 0);
-            $items = $params['items'] ?? [];
-            if (!$menu_id) return new WP_Error('missing_param', 'Menu ID required', ['status' => 400]);
+            $menu_id = (int) ($params['menu_id'] ?? 0);
+            $items = isset($params['items']) && is_array($params['items']) ? $params['items'] : [];
+            if (!$menu_id) {
+                return new WP_Error('missing_param', 'Menu ID required', ['status' => 400]);
+            }
             foreach ($items as $item) {
                 wp_update_nav_menu_item($menu_id, 0, [
                     'menu-item-title'  => sanitize_text_field($item['title'] ?? ''),
@@ -1789,17 +1955,213 @@ function aipilot_agent_action($request) {
                     'menu-item-status' => 'publish',
                 ]);
             }
-            return ['done' => true, 'action' => $action, 'menu_id' => $menu_id, 'items_added' => count($items)];
+            return ['success' => true, 'menu_id' => $menu_id, 'items_added' => count($items)];
 
         case 'activate_plugin':
             $slug = sanitize_text_field($params['plugin'] ?? '');
-            if (!$slug) return new WP_Error('missing_param', 'Plugin slug required', ['status' => 400]);
+            if (!$slug) {
+                return new WP_Error('missing_param', 'Plugin slug required', ['status' => 400]);
+            }
             $result = activate_plugin($slug);
-            return ['done' => true, 'action' => $action, 'plugin' => $slug];
+            if (is_wp_error($result)) {
+                return $result;
+            }
+            return ['success' => true, 'plugin' => $slug];
 
         default:
-            return new WP_Error('unknown_action', "Unknown action: $action", ['status' => 400]);
+            return new WP_Error('unknown_action', "Unknown action: {$action}", ['status' => 400]);
     }
+}
+
+/**
+ * Validate that an execution result can safely mark a proposal completed.
+ */
+function aipilot_validate_agent_action_result($action, $result) {
+    if (!is_array($result) || empty($result['success'])) {
+        return new WP_Error('aipilot_action_result_invalid', 'Action did not return a success result', ['status' => 502]);
+    }
+    if ($action === 'create_post' && (int) ($result['id'] ?? 0) <= 0) {
+        return new WP_Error('aipilot_action_result_invalid', 'Create post did not return a valid ID', ['status' => 502]);
+    }
+    return true;
+}
+
+/**
+ * Acquire a short-lived database-backed lock for one proposal.
+ *
+ * add_option() is atomic because option_name is unique in WordPress. This
+ * prevents two simultaneous approve requests from executing the same action.
+ * A stale lock can be reclaimed after two minutes, while proposals left in
+ * processing still require explicit review rather than unsafe auto-replay.
+ *
+ * @return string|false Lock option name, or false when another request owns it.
+ */
+function aipilot_acquire_proposal_lock($proposal_id) {
+    $lock_key = 'aipilot_proposal_lock_' . md5((string) $proposal_id);
+    $now = time();
+
+    if (add_option($lock_key, $now, '', false)) {
+        return $lock_key;
+    }
+
+    $locked_at = (int) get_option($lock_key, 0);
+    if ($locked_at > 0 && $locked_at < ($now - 120)) {
+        delete_option($lock_key);
+        if (add_option($lock_key, $now, '', false)) {
+            return $lock_key;
+        }
+    }
+
+    return false;
+}
+
+if (!function_exists('aipilot_agent_approve')) {
+    function aipilot_agent_approve($request) {
+        $id = sanitize_text_field($request->get_param('id'));
+        $proposals = get_option('aipilot_agent_proposals', []);
+        if (!is_array($proposals) || !isset($proposals[$id])) {
+            return new WP_Error('not_found', 'Proposal not found', ['status' => 404]);
+        }
+
+        $proposal = $proposals[$id];
+        $status = $proposal['status'] ?? 'pending';
+
+        // Idempotent replay: return the original result without re-executing.
+        if ($status === 'completed' && !empty($proposal['result'])) {
+            return ['approved' => true, 'proposal' => $proposal];
+        }
+
+        if ($status !== 'pending') {
+            return new WP_Error(
+                'proposal_not_pending',
+                "Proposal cannot be approved from status {$status}",
+                ['status' => 409]
+            );
+        }
+
+        $lock_key = aipilot_acquire_proposal_lock($id);
+        if ($lock_key === false) {
+            return new WP_Error(
+                'proposal_processing',
+                'Proposal is already being processed',
+                ['status' => 409]
+            );
+        }
+
+        try {
+            // Re-read after acquiring the lock because another request could
+            // have completed the proposal between the first read and the lock.
+            $proposals = get_option('aipilot_agent_proposals', []);
+            if (!is_array($proposals) || !isset($proposals[$id])) {
+                return new WP_Error('not_found', 'Proposal not found', ['status' => 404]);
+            }
+
+            $proposal = $proposals[$id];
+            $status = $proposal['status'] ?? 'pending';
+            if ($status === 'completed' && !empty($proposal['result'])) {
+                return ['approved' => true, 'proposal' => $proposal];
+            }
+            if ($status !== 'pending') {
+                return new WP_Error(
+                    'proposal_not_pending',
+                    "Proposal cannot be approved from status {$status}",
+                    ['status' => 409]
+                );
+            }
+
+            $proposals[$id]['status'] = 'processing';
+            $proposals[$id]['decided_at'] = current_time('mysql');
+            update_option('aipilot_agent_proposals', $proposals, false);
+
+            $result = aipilot_execute_agent_action(
+                $proposal['action'] ?? '',
+                $proposal['params'] ?? []
+            );
+
+            if (is_wp_error($result)) {
+                $proposals[$id]['status'] = 'failed';
+                $proposals[$id]['error'] = [
+                    'code'    => $result->get_error_code(),
+                    'message' => $result->get_error_message(),
+                ];
+                $proposals[$id]['completed_at'] = current_time('mysql');
+                update_option('aipilot_agent_proposals', $proposals, false);
+                do_action('aipilot_proposal_failed', $proposals[$id], $result);
+                return $result;
+            }
+
+            $valid = aipilot_validate_agent_action_result($proposal['action'] ?? '', $result);
+            if (is_wp_error($valid)) {
+                $proposals[$id]['status'] = 'failed';
+                $proposals[$id]['error'] = [
+                    'code'    => $valid->get_error_code(),
+                    'message' => $valid->get_error_message(),
+                ];
+                $proposals[$id]['completed_at'] = current_time('mysql');
+                update_option('aipilot_agent_proposals', $proposals, false);
+                return $valid;
+            }
+
+            $proposals[$id]['status'] = 'completed';
+            $proposals[$id]['result'] = $result;
+            $proposals[$id]['error'] = null;
+            $proposals[$id]['completed_at'] = current_time('mysql');
+            update_option('aipilot_agent_proposals', $proposals, false);
+
+            do_action('aipilot_proposal_approved', $proposals[$id]);
+
+            return [
+                'approved' => true,
+                'status'   => 'completed',
+                'proposal' => $proposals[$id],
+            ];
+        } finally {
+            delete_option($lock_key);
+        }
+    }
+}
+
+if (!function_exists('aipilot_agent_reject')) {
+    function aipilot_agent_reject($request) {
+        $id = sanitize_text_field($request->get_param('id'));
+        $proposals = get_option('aipilot_agent_proposals', []);
+        if (!is_array($proposals) || !isset($proposals[$id])) {
+            return new WP_Error('not_found', 'Proposal not found', ['status' => 404]);
+        }
+        if (($proposals[$id]['status'] ?? '') !== 'pending') {
+            return new WP_Error('proposal_not_pending', 'Proposal is not pending', ['status' => 409]);
+        }
+
+        $proposals[$id]['status'] = 'rejected';
+        $proposals[$id]['decided_at'] = current_time('mysql');
+        $proposals[$id]['reason'] = sanitize_text_field($request->get_param('reason') ?: 'Rejected by user');
+        update_option('aipilot_agent_proposals', $proposals, false);
+
+        do_action('aipilot_proposal_rejected', $proposals[$id]);
+        return ['rejected' => true, 'status' => 'rejected', 'proposal' => $proposals[$id]];
+    }
+}
+
+/**
+ * Legacy direct action endpoint. Kept for existing clients, but delegates to
+ * the same canonical executor as proposal approval.
+ */
+function aipilot_agent_action($request) {
+    $action = sanitize_key($request->get_param('action') ?: '');
+    $params = $request->get_param('params') ?: [];
+    $result = aipilot_execute_agent_action($action, $params);
+
+    if (is_wp_error($result)) {
+        return $result;
+    }
+
+    $response = array_merge([
+        'done'   => true,
+        'action' => $action,
+    ], $result);
+    $response['result'] = $result;
+
+    return $response;
 }
 
 // ─── ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ КОНТЕКСТА ─────────────────────────
@@ -2249,4 +2611,12 @@ function aipilot_can($capability) {
 
 require_once dirname(__FILE__) . '/src/class-admin.php';
 AIPILOT_Admin::init();
+
+// Make the connection screen easy to find from the Plugins list as well.
+add_filter('plugin_action_links_' . plugin_basename(AI_PILOT_PLUGIN_FILE), function ($links) {
+    $dashboard_link = '<a href="' . esc_url(admin_url('admin.php?page=' . AIPILOT_Admin::MENU_SLUG)) . '">' .
+        esc_html__('Открыть AI Pilot', 'ai-pilot') . '</a>';
+    array_unshift($links, $dashboard_link);
+    return $links;
+});
 
