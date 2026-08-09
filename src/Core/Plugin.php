@@ -18,7 +18,7 @@ class Plugin {
      *
      * @var string
      */
-    const VERSION = '2.2.0';
+    const VERSION = '2.2.2';
 
     /**
      * API Namespace - standardized primary namespace

@@ -30,6 +30,8 @@ $GLOBALS['aipilot_categories']= [];
 $GLOBALS['aipilot_cat_seq']   = 0;
 $GLOBALS['aipilot_tags']      = [];
 $GLOBALS['aipilot_tag_seq']   = 0;
+$GLOBALS['aipilot_post_cats'] = [];
+$GLOBALS['aipilot_post_tags'] = [];
 $GLOBALS['aipilot_menus']     = [];
 $GLOBALS['aipilot_users']     = [];
 $GLOBALS['aipilot_transients']= [];
@@ -354,8 +356,48 @@ function wp_set_post_categories($post_id, $cat_ids = []) {
 }
 
 function wp_set_post_tags($post_id, $tags = [], $append = false) {
-    $GLOBALS['aipilot_post_tags'][$post_id] = (array) $tags;
+    $tags = array_values((array) $tags);
+    if ($append && !empty($GLOBALS['aipilot_post_tags'][$post_id])) {
+        $tags = array_merge($GLOBALS['aipilot_post_tags'][$post_id], $tags);
+    }
+    $GLOBALS['aipilot_post_tags'][$post_id] = array_values(array_unique($tags));
     return $GLOBALS['aipilot_post_tags'][$post_id];
+}
+
+function wp_get_post_tags($post_id = 0, $args = []) {
+    $names = isset($GLOBALS['aipilot_post_tags'][$post_id])
+        ? $GLOBALS['aipilot_post_tags'][$post_id]
+        : [];
+    $result = [];
+
+    foreach ($names as $name_or_id) {
+        if (is_numeric($name_or_id) && isset($GLOBALS['aipilot_tags'][(int) $name_or_id])) {
+            $result[] = clone $GLOBALS['aipilot_tags'][(int) $name_or_id];
+            continue;
+        }
+
+        $found = null;
+        foreach ($GLOBALS['aipilot_tags'] as $term) {
+            if (strcasecmp($term->name, (string) $name_or_id) === 0) {
+                $found = $term;
+                break;
+            }
+        }
+
+        if (!$found) {
+            $inserted = wp_insert_term((string) $name_or_id, 'post_tag');
+            $term_id = is_array($inserted) ? (int) $inserted['term_id'] : (int) $inserted;
+            $found = isset($GLOBALS['aipilot_tags'][$term_id])
+                ? $GLOBALS['aipilot_tags'][$term_id]
+                : null;
+        }
+
+        if ($found) {
+            $result[] = clone $found;
+        }
+    }
+
+    return $result;
 }
 
 // ─── CATEGORIES / TAGS / TAXONOMY ────────────────────────────────────
@@ -394,6 +436,41 @@ function wp_insert_term($name, $taxonomy, $args = []) {
         'taxonomy'=> $taxonomy,
     ];
     return ['term_id' => $id];
+}
+
+function term_exists($term, $taxonomy = '') {
+    $store = $taxonomy === 'category'
+        ? $GLOBALS['aipilot_categories']
+        : ($taxonomy === 'post_tag' ? $GLOBALS['aipilot_tags'] : []);
+
+    if (is_numeric($term)) {
+        $id = (int) $term;
+        return isset($store[$id]) ? ['term_id' => $id, 'term_taxonomy_id' => $id] : null;
+    }
+
+    $needle = trim((string) $term);
+    foreach ($store as $id => $item) {
+        if (strcasecmp($item->name, $needle) === 0 || strcasecmp($item->slug, $needle) === 0) {
+            return ['term_id' => (int) $id, 'term_taxonomy_id' => (int) $id];
+        }
+    }
+
+    return null;
+}
+
+function get_term($term_id, $taxonomy = '') {
+    $id = (int) $term_id;
+    if ($taxonomy === 'category') {
+        return isset($GLOBALS['aipilot_categories'][$id])
+            ? clone $GLOBALS['aipilot_categories'][$id]
+            : null;
+    }
+    if ($taxonomy === 'post_tag') {
+        return isset($GLOBALS['aipilot_tags'][$id])
+            ? clone $GLOBALS['aipilot_tags'][$id]
+            : null;
+    }
+    return null;
 }
 
 function wp_update_term($term_id, $taxonomy, $args = []) {
@@ -444,7 +521,7 @@ function get_users($args = []) {
 
 function get_plugins() {
     return [
-        'ai-pilot/ai-pilot-plugin.php' => ['Name' => 'AI Pilot', 'Version' => '2.2.0'],
+        'ai-pilot/ai-pilot-plugin.php' => ['Name' => 'AI Pilot', 'Version' => '2.2.2'],
     ];
 }
 

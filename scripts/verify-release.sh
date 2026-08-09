@@ -18,12 +18,15 @@ for file in "${required[@]}"; do
   [[ -f "$ROOT/$file" ]] || { echo "Missing required file: $file" >&2; exit 1; }
 done
 
-grep -Eq "Version:[[:space:]]*2\.2\.0" "$MAIN" || { echo "Plugin header is not 2.2.0" >&2; exit 1; }
-grep -Eq "AI_PILOT_VERSION', '2\.2\.0'" "$MAIN" || { echo "Runtime version is not 2.2.0" >&2; exit 1; }
+grep -Eq "Version:[[:space:]]*2\.2\.2" "$MAIN" || { echo "Plugin header is not 2.2.2" >&2; exit 1; }
+grep -Eq "AI_PILOT_VERSION', '2\.2\.2'" "$MAIN" || { echo "Runtime version is not 2.2.2" >&2; exit 1; }
 grep -q "add_menu_page" "$ROOT/src/class-admin.php" || { echo "Top-level admin menu missing" >&2; exit 1; }
 grep -q "aipilot_agent_connection_status" "$MAIN" || { echo "Connection status endpoint missing" >&2; exit 1; }
 grep -q "aipilot_execute_agent_action" "$MAIN" || { echo "Proposal executor missing" >&2; exit 1; }
 grep -q "'approved' => true" "$MAIN" || { echo "Canonical approval response missing" >&2; exit 1; }
+grep -q "aipilot_apply_post_terms" "$MAIN" || { echo "Taxonomy application missing from runtime" >&2; exit 1; }
+grep -q "function aipilot_resolve_category_ids" "$ROOT/src/taxonomy-helpers.php" || { echo "Category resolver missing" >&2; exit 1; }
+grep -q "function aipilot_resolve_tag_names" "$ROOT/src/taxonomy-helpers.php" || { echo "Tag resolver missing" >&2; exit 1; }
 
 while IFS= read -r -d '' file; do
   php -l "$file" >/dev/null
@@ -41,4 +44,4 @@ if grep -RIE --exclude='*.md' --exclude='readme.txt' --exclude='verify-release.s
   exit 1
 fi
 
-echo "AI Pilot WP plugin 2.2.0 release verification passed."
+echo "AI Pilot WP plugin 2.2.2 release verification passed."

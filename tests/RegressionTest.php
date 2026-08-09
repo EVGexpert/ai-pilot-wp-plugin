@@ -959,4 +959,166 @@ class RegressionTest {
         TestHelpers::assertEqual(0, count($GLOBALS['aipilot_posts']));
     }
 
+
+    public function test_78_create_post_accepts_singular_category_and_tag_fields() {
+        TestHelpers::resetState();
+        TestHelpers::loadPlugin();
+
+        $result = TestHelpers::invokeRoute('POST', '/agent/action', [
+            'action' => 'create_post',
+            'params' => [
+                'title' => 'Taxonomy singular',
+                'content' => '<!-- wp:paragraph --><p>Body</p><!-- /wp:paragraph -->',
+                'status' => 'draft',
+                'category' => 'SEO',
+                'tag' => 'AI Pilot, Automation',
+            ],
+        ]);
+
+        TestHelpers::assertNotWPError($result);
+        TestHelpers::assertTrue($result['done']);
+        $post_id = $result['post_id'];
+
+        TestHelpers::assertEqual(1, count($GLOBALS['aipilot_post_cats'][$post_id]));
+        $category_id = $GLOBALS['aipilot_post_cats'][$post_id][0];
+        TestHelpers::assertEqual('SEO', $GLOBALS['aipilot_categories'][$category_id]->name);
+        TestHelpers::assertEqual(['AI Pilot', 'Automation'], $GLOBALS['aipilot_post_tags'][$post_id]);
+        TestHelpers::assertEqual([$category_id], $result['category_ids']);
+        TestHelpers::assertEqual(['AI Pilot', 'Automation'], $result['tag_names']);
+    }
+
+    public function test_79_create_post_accepts_mixed_category_and_tag_ids_names() {
+        TestHelpers::resetState();
+        TestHelpers::loadPlugin();
+
+        $category_id = wp_create_category('Existing category');
+        $tag_result = wp_insert_term('Existing tag', 'post_tag');
+        $tag_id = $tag_result['term_id'];
+
+        $result = TestHelpers::invokeRoute('POST', '/agent/action', [
+            'action' => 'create_post',
+            'params' => [
+                'title' => 'Mixed terms',
+                'content' => '<p>Body</p>',
+                'status' => 'draft',
+                'categories' => [$category_id, 'New category'],
+                'tags' => [$tag_id, 'New tag'],
+            ],
+        ]);
+
+        TestHelpers::assertNotWPError($result);
+        $post_id = $result['post_id'];
+        TestHelpers::assertEqual(2, count($GLOBALS['aipilot_post_cats'][$post_id]));
+        TestHelpers::assertEqual(['Existing tag', 'New tag'], $GLOBALS['aipilot_post_tags'][$post_id]);
+        TestHelpers::assertEqual(2, count($result['category_ids']));
+        TestHelpers::assertEqual(['Existing tag', 'New tag'], $result['tag_names']);
+        TestHelpers::assertEqual(2, count($result['tag_ids']));
+    }
+
+    public function test_80_create_post_accepts_comma_separated_term_strings() {
+        TestHelpers::resetState();
+        TestHelpers::loadPlugin();
+
+        $result = TestHelpers::invokeRoute('POST', '/agent/action', [
+            'action' => 'create_post',
+            'params' => [
+                'title' => 'Comma separated',
+                'content' => '<p>Body</p>',
+                'categories' => 'Новости, Кейсы',
+                'tags' => 'AI, WordPress; Automation',
+            ],
+        ]);
+
+        TestHelpers::assertNotWPError($result);
+        $post_id = $result['post_id'];
+        TestHelpers::assertEqual(2, count($GLOBALS['aipilot_post_cats'][$post_id]));
+        TestHelpers::assertEqual(['AI', 'WordPress', 'Automation'], $GLOBALS['aipilot_post_tags'][$post_id]);
+    }
+
+    public function test_81_update_post_applies_and_clears_terms() {
+        TestHelpers::resetState();
+        TestHelpers::loadPlugin();
+
+        $post_id = wp_insert_post([
+            'post_title' => 'Update terms',
+            'post_content' => '<p>Body</p>',
+            'post_status' => 'draft',
+            'post_type' => 'post',
+        ]);
+
+        $updated = TestHelpers::invokeRoute('POST', '/agent/action', [
+            'action' => 'update_post',
+            'params' => [
+                'post_id' => $post_id,
+                'data' => [
+                    'post_title' => 'Updated terms',
+                    'category' => 'Updates',
+                    'tags' => 'One, Two',
+                ],
+            ],
+        ]);
+
+        TestHelpers::assertNotWPError($updated);
+        TestHelpers::assertEqual(1, count($GLOBALS['aipilot_post_cats'][$post_id]));
+        TestHelpers::assertEqual(['One', 'Two'], $GLOBALS['aipilot_post_tags'][$post_id]);
+
+        $cleared = TestHelpers::invokeRoute('POST', '/agent/action', [
+            'action' => 'update_post',
+            'params' => [
+                'post_id' => $post_id,
+                'data' => [
+                    'categories' => [],
+                    'tags' => [],
+                ],
+            ],
+        ]);
+
+        TestHelpers::assertNotWPError($cleared);
+        TestHelpers::assertEqual([], $GLOBALS['aipilot_post_cats'][$post_id]);
+        TestHelpers::assertEqual([], $GLOBALS['aipilot_post_tags'][$post_id]);
+    }
+
+    public function test_82_approved_proposal_applies_terms_once() {
+        TestHelpers::resetState();
+        TestHelpers::loadPlugin();
+
+        $created = TestHelpers::invokeRoute('POST', '/agent/propose', [
+            'action' => 'create_post',
+            'params' => [
+                'target' => [
+                    'title' => 'Approve terms',
+                    'content' => '<p>Body</p>',
+                ],
+                'patch' => [
+                    'status' => 'draft',
+                    'category' => 'Content',
+                    'tags' => ['AI Pilot', 'WordPress'],
+                ],
+            ],
+        ]);
+
+        $id = $created['proposal']['id'];
+        $first = TestHelpers::invokeParamRoute(
+            'POST',
+            '/agent/approve/(?P<id>[a-f0-9-]+)',
+            ['id' => $id]
+        );
+        $post_count = count($GLOBALS['aipilot_posts']);
+        $second = TestHelpers::invokeParamRoute(
+            'POST',
+            '/agent/approve/(?P<id>[a-f0-9-]+)',
+            ['id' => $id]
+        );
+
+        TestHelpers::assertNotWPError($first);
+        TestHelpers::assertTrue($first['approved']);
+        TestHelpers::assertEqual(1, count($first['proposal']['result']['category_ids']));
+        TestHelpers::assertEqual(['AI Pilot', 'WordPress'], $first['proposal']['result']['tag_names']);
+        TestHelpers::assertEqual($post_count, count($GLOBALS['aipilot_posts']));
+        TestHelpers::assertEqual(
+            $first['proposal']['result']['id'],
+            $second['proposal']['result']['id']
+        );
+    }
+
 }

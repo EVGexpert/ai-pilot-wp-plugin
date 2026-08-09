@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.2.2 — 2026-07-28
+
+### Fixed
+- Categories now accept IDs, names, mixed arrays and comma-separated strings.
+- Missing named categories are created before assignment.
+- Tags now accept IDs, names, mixed arrays and comma-separated strings.
+- Singular `category` / `tag` fields are normalized to `categories` / `tags`.
+- Category and tag changes are applied by the actual monolithic runtime used in production.
+- Direct post create/update endpoints use the same taxonomy normalization.
+- Post updates can explicitly clear categories and tags.
+
+### Compatibility
+- Preserves the 2.2.0 proposal/approve execution contract and idempotent replay.
+- Preserves the top-level AI Pilot admin interface and one-click connection flow.
+- Keeps both `aipilot/v1` and `openclaw/v1` REST namespaces.
+
+### Packaging
+- Full package uses the same top-level folder as the previous working source archive.
+- Version 2.2.1 is withdrawn and should not be activated.
+
 ## 2.2.0 — 2026-07-27
 
 ### Added
@@ -26,3 +46,10 @@
 - Repeated approval returns the stored result and does not create a duplicate post.
 - A database-backed per-proposal lock blocks simultaneous approve requests.
 - Disconnect revokes the active token and removes pending connection codes.
+
+## Known Limitations (stable baseline 2.2.2)
+
+- На production (job.yousite.agency) установлена предыдущая сборка 2.2.2: присутствует роут `/aipilot/v1/diag`, отсутствуют модульные роуты `/diagnostics/*`, `/media/*`, `/agent/capabilities`, `/agent/proposal`, `/overview`, `/structure`. Данный архив (модульная сборка с `modules/` loader и `src/taxonomy-helpers.php`) — актуальная версия 2.2.2; при следующем обновлении синхронизировать сайт с этим пакетом через «Заменить текущую загруженной».
+- Версия 2.2.1 отозвана (некорректный установочный пакет) — не активировать.
+- На сайте в `/wp-content/plugins/` остаётся неактивная копия `ai-pilot-wp-plugin-2.2.1/` — можно удалить после подтверждения работоспособности 2.2.2.
+- GitHub main отставал на 2.2.0 до данного коммита (push не выполнялся).

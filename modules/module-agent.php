@@ -15,6 +15,8 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
+require_once AI_PILOT_PLUGIN_DIR . 'src/taxonomy-helpers.php';
+
 // ─── РЕГИСТРАЦИЯ ЭНДПОИНТОВ ────────────────────────────────────────
 
 add_action('rest_api_init', function () {
@@ -858,22 +860,28 @@ function aipilot_agent_create_post($params) {
         return ['error' => $post_id->get_error_message()];
     }
 
-    if (!empty($params['categories'])) {
-        wp_set_post_categories($post_id, array_map('intval', (array) $params['categories']));
-    }
-    if (!empty($params['tags'])) {
-        wp_set_post_tags($post_id, array_map('sanitize_text_field', (array) $params['tags']));
-    }
+    $term_result = aipilot_apply_post_terms($post_id, $params, false);
+
     if (!empty($params['featured_media'])) {
         update_post_meta($post_id, '_thumbnail_id', (int) $params['featured_media']);
     }
 
     $post = get_post($post_id);
-    return [
-        'success' => true,
-        'id'      => $post_id,
-        'post'    => aipilot_format_structure_post($post),
+    $result = [
+        'success'      => true,
+        'id'           => $post_id,
+        'post_id'      => $post_id,
+        'status'       => get_post_status($post_id),
+        'post'         => aipilot_format_structure_post($post),
+        'category_ids' => $term_result['category_ids'],
+        'tag_names'    => $term_result['tag_names'],
+        'tag_ids'      => $term_result['tag_ids'],
     ];
+    if (!empty($term_result['errors'])) {
+        $result['term_warnings'] = $term_result['errors'];
+    }
+
+    return $result;
 }
 
 /**
@@ -901,18 +909,23 @@ function aipilot_agent_update_post($params) {
         return ['error' => $result->get_error_message()];
     }
 
-    if (isset($params['categories'])) {
-        wp_set_post_categories($id, array_map('intval', (array) $params['categories']));
-    }
-    if (isset($params['tags'])) {
-        wp_set_post_tags($id, array_map('sanitize_text_field', (array) $params['tags']));
+    $term_result = aipilot_apply_post_terms($id, $params, true);
+
+    $response = [
+        'success'      => true,
+        'id'           => $id,
+        'post_id'      => $id,
+        'status'       => get_post_status($id),
+        'post'         => aipilot_format_structure_post(get_post($id)),
+        'category_ids' => $term_result['category_ids'],
+        'tag_names'    => $term_result['tag_names'],
+        'tag_ids'      => $term_result['tag_ids'],
+    ];
+    if (!empty($term_result['errors'])) {
+        $response['term_warnings'] = $term_result['errors'];
     }
 
-    return [
-        'success' => true,
-        'id'      => $id,
-        'post'    => aipilot_format_structure_post(get_post($id)),
-    ];
+    return $response;
 }
 
 /**

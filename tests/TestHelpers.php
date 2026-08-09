@@ -43,6 +43,8 @@ class TestHelpers {
         $GLOBALS['aipilot_cat_seq']    = 0;
         $GLOBALS['aipilot_tags']       = [];
         $GLOBALS['aipilot_tag_seq']    = 0;
+        $GLOBALS['aipilot_post_cats']  = [];
+        $GLOBALS['aipilot_post_tags']  = [];
         $GLOBALS['aipilot_menus']      = [];
         $GLOBALS['aipilot_users']      = [];
         $GLOBALS['aipilot_transients'] = [];

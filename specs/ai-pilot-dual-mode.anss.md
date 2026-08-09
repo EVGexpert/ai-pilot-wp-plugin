@@ -96,7 +96,7 @@ Write → detect authoring mode → choose skill → validate → proposal → a
 {
   "schemaVersion": "1.1",
   "siteId": "...",
-  "connector": { "name": "AI Pilot Remote Site API", "version": "2.2.0" },
+  "connector": { "name": "AI Pilot Remote Site API", "version": "2.2.2" },
   "intelligence": { structure, contentList, contentRead, health, diagnostics, media },
   "authoring": {
     "write": true,

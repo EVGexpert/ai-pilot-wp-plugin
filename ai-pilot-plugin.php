@@ -2,7 +2,7 @@
 /**
  * Plugin Name: AI Pilot – Remote Site API
  * Description: REST API для удалённого управления WordPress-сайтами через AI Pilot
- * Version: 2.2.0
+ * Version: 2.2.2
  * Author: AI Pilot
  * License: GPLv2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -17,10 +17,12 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('AI_PILOT_VERSION', '2.2.0');
+define('AI_PILOT_VERSION', '2.2.2');
 define('AI_PILOT_PLUGIN_FILE', __FILE__);
 define('AI_PILOT_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AI_PILOT_PLUGIN_URL', plugin_dir_url(__FILE__));
+
+require_once AI_PILOT_PLUGIN_DIR . 'src/taxonomy-helpers.php';
 
 // ─── РЕГИСТРАЦИЯ РОУТОВ ─────────────────────────────────────────────
 
@@ -401,12 +403,6 @@ function aipilot_create_post($request) {
         'post_excerpt' => sanitize_text_field($request->get_param('excerpt') ?: ''),
     ];
 
-    if ($request->get_param('categories')) {
-        $post_data['post_category'] = array_map('intval', (array)$request->get_param('categories'));
-    }
-    if ($request->get_param('tags_input')) {
-        $post_data['tags_input'] = array_map('sanitize_text_field', (array)$request->get_param('tags_input'));
-    }
     if ($request->get_param('featured_media')) {
         $post_data['meta_input'] = ['_thumbnail_id' => (int)$request->get_param('featured_media')];
     }
@@ -415,6 +411,16 @@ function aipilot_create_post($request) {
 
     if (is_wp_error($post_id)) {
         return new WP_Error('post_create_failed', $post_id->get_error_message(), ['status' => 500]);
+    }
+
+    $term_params = [];
+    foreach (['categories', 'category', 'tags', 'tag', 'tags_input'] as $field) {
+        if ($request->get_param($field) !== null) {
+            $term_params[$field === 'tags_input' ? 'tags' : $field] = $request->get_param($field);
+        }
+    }
+    if ($post_data['post_type'] === 'post' && !empty($term_params)) {
+        aipilot_apply_post_terms((int) $post_id, $term_params, false);
     }
 
     return aipilot_format_post(get_post($post_id));
@@ -458,11 +464,14 @@ function aipilot_update_post($request) {
         return new WP_Error('post_update_failed', $result->get_error_message(), ['status' => 500]);
     }
 
-    if ($request->get_param('categories') !== null) {
-        wp_set_post_categories($id, array_map('intval', (array)$request->get_param('categories')));
+    $term_params = [];
+    foreach (['categories', 'category', 'tags', 'tag', 'tags_input'] as $field) {
+        if ($request->get_param($field) !== null) {
+            $term_params[$field === 'tags_input' ? 'tags' : $field] = $request->get_param($field);
+        }
     }
-    if ($request->get_param('tags_input') !== null) {
-        wp_set_post_tags($id, array_map('sanitize_text_field', (array)$request->get_param('tags_input')));
+    if (!empty($term_params)) {
+        aipilot_apply_post_terms($id, $term_params, true);
     }
 
     return aipilot_format_post(get_post($id));
@@ -1766,10 +1775,20 @@ add_action('rest_api_init', function() {
 function aipilot_normalize_agent_action_params($action, $params) {
     $params = is_array($params) ? $params : [];
 
-    if ($action === 'create_post' && (isset($params['target']) || isset($params['patch']))) {
+    if (in_array($action, ['create_post', 'update_post'], true) && (isset($params['target']) || isset($params['patch']))) {
         $target = isset($params['target']) && is_array($params['target']) ? $params['target'] : [];
         $patch = isset($params['patch']) && is_array($params['patch']) ? $params['patch'] : [];
-        return array_merge($target, $patch);
+        $params = array_merge($target, $patch);
+    }
+
+    // Accept both singular and plural names from older/newer Auth API prompts.
+    if (in_array($action, ['create_post', 'update_post'], true)) {
+        if (!array_key_exists('categories', $params) && array_key_exists('category', $params)) {
+            $params['categories'] = $params['category'];
+        }
+        if (!array_key_exists('tags', $params) && array_key_exists('tag', $params)) {
+            $params['tags'] = $params['tag'];
+        }
     }
 
     return $params;
@@ -1836,6 +1855,7 @@ if (!function_exists('aipilot_agent_pending')) {
     }
 }
 
+
 /**
  * Execute a trusted, server-stored action.
  *
@@ -1887,21 +1907,32 @@ function aipilot_execute_agent_action($action, $params) {
                 return new WP_Error('aipilot_post_create_failed', 'WordPress did not return a post ID', ['status' => 500]);
             }
 
-            if ($type === 'post' && !empty($params['categories']) && function_exists('wp_set_post_categories')) {
-                wp_set_post_categories($post_id, array_map('intval', (array) $params['categories']));
-            }
-            if ($type === 'post' && !empty($params['tags']) && function_exists('wp_set_post_tags')) {
-                wp_set_post_tags($post_id, array_map('sanitize_text_field', (array) $params['tags']));
+            $term_result = [
+                'category_ids' => [],
+                'tag_names' => [],
+                'tag_ids' => [],
+                'errors' => [],
+            ];
+            if ($type === 'post') {
+                $term_result = aipilot_apply_post_terms($post_id, $params, false);
             }
 
-            return [
+            $result = [
                 'success' => true,
                 'id'      => $post_id,
                 'post_id' => $post_id,
                 'type'    => $type,
                 'status'  => get_post_status($post_id),
                 'url'     => get_permalink($post_id),
+                'category_ids' => $term_result['category_ids'],
+                'tag_names' => $term_result['tag_names'],
+                'tag_ids' => $term_result['tag_ids'],
             ];
+            if (!empty($term_result['errors'])) {
+                $result['term_warnings'] = $term_result['errors'];
+            }
+
+            return $result;
 
         case 'update_post':
             $post_id = (int) ($params['post_id'] ?? $params['id'] ?? 0);
@@ -1909,18 +1940,38 @@ function aipilot_execute_agent_action($action, $params) {
             if (!$post_id || !get_post($post_id)) {
                 return new WP_Error('not_found', 'Post not found', ['status' => 404]);
             }
-            unset($data['post_id'], $data['id']);
+
+            $term_params = array_merge($params, $data);
+            unset(
+                $data['post_id'],
+                $data['id'],
+                $data['data'],
+                $data['categories'],
+                $data['category'],
+                $data['tags'],
+                $data['tag']
+            );
+
             $result = wp_update_post(array_merge(['ID' => $post_id], $data), true);
             if (is_wp_error($result)) {
                 return $result;
             }
-            return [
+
+            $term_result = aipilot_apply_post_terms($post_id, $term_params, true);
+            $response = [
                 'success' => true,
                 'id'      => $post_id,
                 'post_id' => $post_id,
                 'status'  => get_post_status($post_id),
                 'url'     => get_permalink($post_id),
+                'category_ids' => $term_result['category_ids'],
+                'tag_names' => $term_result['tag_names'],
+                'tag_ids' => $term_result['tag_ids'],
             ];
+            if (!empty($term_result['errors'])) {
+                $response['term_warnings'] = $term_result['errors'];
+            }
+            return $response;
 
         case 'update_option':
             $option = sanitize_text_field($params['option'] ?? '');

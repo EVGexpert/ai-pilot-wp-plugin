@@ -1,0 +1,16 @@
+AI Pilot WP-plugin 2.2.2 — installation
+
+1. Make a backup of the current plugin folder.
+2. In WordPress, open Plugins → Add Plugin → Upload Plugin.
+3. Select ai-pilot-wp-plugin-2.2.2.zip.
+4. Click “Replace current with uploaded”.
+5. Do not install or activate this ZIP as a second plugin copy.
+6. Check that AI Pilot stays active and connected.
+7. Check /wp-json/aipilot/v1/ping — version must be 2.2.2.
+8. Create one draft through AI Pilot with:
+   - Gutenberg content;
+   - one category by name;
+   - two tags by name.
+9. Verify title, content, category, tags and draft status.
+
+The package top-level folder is ai-pilot-wp-plugin-main, matching the supplied previous working source archive.
