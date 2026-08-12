@@ -4,7 +4,7 @@ Tags: ai, automation, remote management, content, assistant
 Requires at least: 5.6
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 2.2.2
+Stable tag: 2.3.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -34,6 +34,9 @@ AI Pilot — Remote Site API создаёт защищённый REST-мост �
 
 == Upgrade Notice ==
 
+= 2.3.0 =
+Расширяет ответ verify-code метаданными сайта (plugin_version, wp_version, capabilities, instance_id, hostname, expires_at) для нового onboarding flow. Обратная совместимость сохранена — обновляйте поверх действующей версии через «Заменить текущую загруженной».
+
 = 2.2.2 =
 Исправляет применение категорий и меток при создании и обновлении записей. Загружайте архив поверх действующей версии через действие WordPress «Заменить текущую загруженной», а не как второй отдельный плагин.
 
@@ -41,6 +44,12 @@ AI Pilot — Remote Site API создаёт защищённый REST-мост �
 Обновляет контракт proposal/approve: подтверждение теперь действительно выполняет сохранённое действие и возвращает результат. Перед обновлением рекомендуется сделать backup каталога плагина.
 
 == Changelog ==
+
+= 2.3.0 =
+* verify-code дополнительно отдаёт plugin_version, wp_version, capabilities, instance_id, hostname и expires_at (ISO 8601) из записи connect-code.
+* connect-code хранит метаданные сайта: plugin_version, wp_version, capabilities, instance_id, hostname.
+* Все новые поля опциональны — старые коды (плагин 2.2.2) обрабатываются через fallback.
+* Существующие поля verify-code (verified, site_url, site_name, token) не изменены; клиенты auth-api 0.5.x работают без правок.
 
 = 2.2.2 =
 * Категории поддерживаются по ID и названию; отсутствующие именованные категории создаются автоматически.

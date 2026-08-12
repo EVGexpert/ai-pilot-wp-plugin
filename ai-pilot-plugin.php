@@ -2,7 +2,7 @@
 /**
  * Plugin Name: AI Pilot – Remote Site API
  * Description: REST API для удалённого управления WordPress-сайтами через AI Pilot
- * Version: 2.2.2
+ * Version: 2.3.0
  * Author: AI Pilot
  * License: GPLv2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -17,7 +17,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('AI_PILOT_VERSION', '2.2.2');
+define('AI_PILOT_VERSION', '2.3.0');
 define('AI_PILOT_PLUGIN_FILE', __FILE__);
 define('AI_PILOT_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('AI_PILOT_PLUGIN_URL', plugin_dir_url(__FILE__));
@@ -1500,12 +1500,17 @@ function aipilot_agent_connect_code() {
     }
 
     $codes[$code] = [
-        'expires'   => $expires,
-        'used'      => false,
-        'token'     => $token,
-        'site_url'  => get_site_url(),
-        'site_name' => get_bloginfo('name'),
-        'created_at'=> current_time('mysql'),
+        'expires'        => $expires,
+        'used'           => false,
+        'token'          => $token,
+        'site_url'       => get_site_url(),
+        'site_name'      => get_bloginfo('name'),
+        'plugin_version' => AI_PILOT_VERSION,
+        'wp_version'     => get_bloginfo('version'),
+        'capabilities'   => aipilot_get_capabilities(),
+        'instance_id'    => function_exists('aipilot_get_site_id') ? aipilot_get_site_id() : md5(get_site_url()),
+        'hostname'       => strtolower((string)(parse_url(get_site_url(), PHP_URL_HOST) ?: '')),
+        'created_at'     => current_time('mysql'),
     ];
     update_option('aipilot_connect_codes', $codes, false);
 
@@ -1582,11 +1587,16 @@ function aipilot_agent_verify_code($request) {
     update_option('aipilot_connect_codes', $codes, false);
 
     return [
-        'verified'  => true,
-        'site_url'  => $entry['site_url'],
-        'site_name' => $entry['site_name'],
-        'token'     => $token,
-        'plugin_version' => AI_PILOT_VERSION,
+        'verified'       => true,
+        'site_url'       => $entry['site_url'],
+        'site_name'      => $entry['site_name'],
+        'token'          => $token,
+        'plugin_version' => $entry['plugin_version'] ?? AI_PILOT_VERSION,
+        'wp_version'     => $entry['wp_version'] ?? get_bloginfo('version'),
+        'capabilities'   => $entry['capabilities'] ?? aipilot_get_capabilities(),
+        'instance_id'    => $entry['instance_id'] ?? (function_exists('aipilot_get_site_id') ? aipilot_get_site_id() : md5(get_site_url())),
+        'hostname'       => $entry['hostname'] ?? strtolower((string)(parse_url(get_site_url(), PHP_URL_HOST) ?: '')),
+        'expires_at'     => gmdate('c', (int)($entry['expires'] ?? 0)),
     ];
 }
 
